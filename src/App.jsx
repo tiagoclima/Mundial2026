@@ -462,13 +462,15 @@ export default function App() {
     try {
       // live.json is fetched and written by the GitHub Actions workflow
       // It lives at /live.json in the deployed site (served from /public in dev)
-      const res = await fetch(`/live.json?t=${Date.now()}`)
+      const base = import.meta.env.BASE_URL
+      const res = await fetch(`${base}live.json?t=${Date.now()}`)
+      //const res = await fetch(`/live.json?t=${Date.now()}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = await res.json()
       setData(json)
       setLastUpdate(new Date(json.fetched_at))
     } catch (e) {
-      setError("!!!! Não foi possível carregar os dados ao vivo." + e)
+      setError("Não foi possível carregar os dados ao vivo.")
     }
   }
 
