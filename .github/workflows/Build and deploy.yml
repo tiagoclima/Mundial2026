@@ -3,7 +3,7 @@ name: Build & Deploy
 on:
   # Runs every 15 minutes during the tournament
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '1-59/5 * * * *'
 
   # Also runs on every push to main (e.g. code changes)
   push:
