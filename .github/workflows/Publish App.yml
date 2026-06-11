@@ -30,8 +30,8 @@ jobs:
         run: npm run build
         # The build picks up public/live.json automatically
 
-      - name: Copy live data into dist
-        run: cp public/live.json dist/live.json
+     # - name: Copy live data into dist
+      #  run: cp public/live.json dist/live.json
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
