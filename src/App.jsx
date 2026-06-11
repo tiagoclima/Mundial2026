@@ -10,27 +10,35 @@ const TV_COLORS = {
   "SPTV": { bg: "#8B0000", text: "#fff" },
 }
 
-// TV overrides for specific matches (keyed by match_number from API)
-const TV_BY_MATCH = {
-  1:  ["TVI","LV","SPTV"],   // Mexico vs South Africa
-  // Group stage PT
-  57: ["SIC","LV","SPTV"],   // Portugal vs RD Congo   (match 57 — adjust if API differs)
-  63: ["TVI","LV","SPTV"],   // Portugal vs Uzbekistan
-  72: ["RTP1","LV","SPTV"],  // Colombia vs Portugal
-  // Other free-to-air
-  16: ["RTP1","LV","SPTV"],  // France vs Senegal
-  18: ["SIC","LV","SPTV"],   // Canada vs UEFA-A
-  24: ["RTP1","LV","SPTV"],  // Switzerland vs UEFA-A
-  36: ["TVI","LV","SPTV"],   // Germany vs Ivory Coast
-  49: ["SIC","LV","SPTV"],   // Ecuador vs Germany
-  54: ["TVI","LV","SPTV"],   // Norway vs France
-  // Knockout
-  98: ["RTP1","LV","SPTV"],  // QF
-  101:["SIC","LV","SPTV"],   // SF1
-  102:["TVI","LV","SPTV"],   // SF2
-  104:["RTP1","LV","SPTV"],  // Final
+// TV overrides keyed by 'home_team|away_team' -- matches API team names exactly
+// All matches have SPTV by default; only overrides with free-to-air or LV listed here
+const TV_BY_TEAMS = {
+  "Mexico|South Africa":            ["SPTV","LV","TVI"],   // match 1
+  "Canada|Bosnia-Herzegovina":      ["SPTV","LV","SIC"],   // match 3
+  "Brazil|Morocco":                 ["SPTV","LV"],          // match 7
+  "Germany|Curaçao":                ["SPTV","LV"],          // match 10
+  "Spain|Cabo Verde":               ["SPTV","LV"],          // match 14
+  "France|Senegal":                 ["SPTV","LV","RTP1"],   // match 17
+  "Portugal|Congo DR":              ["SPTV","LV","SIC"],    // match 23
+  "Switzerland|Bosnia-Herzegovina": ["SPTV","LV","RTP1"],   // match 26
+  "Brazil|Haiti":                   ["SPTV","LV"],          // match 29
+  "Germany|Côte d'Ivoire":          ["SPTV","LV","TVI"],    // match 33
+  "Netherlands|Sweden":             ["SPTV"],                // match 35
+  "Spain|Saudi Arabia":             ["SPTV","LV"],          // match 38
+  "Argentina|Austria":              ["SPTV","LV"],          // match 43
+  "Portugal|Uzbekistan":            ["SPTV","LV","TVI"],    // match 47
+  "Scotland|Brazil":                ["SPTV"],                // match 49
+  "Morocco|Haiti":                  ["SPTV"],                // match 50
+  "Ecuador|Germany":                ["SPTV","LV","SIC"],    // match 56
+  "Norway|France":                  ["SPTV","TVI"],          // match 61
+  "Colombia|Portugal":              ["SPTV","LV","RTP1"],   // match 71
 }
-const DEFAULT_TV = ["LV","SPTV"]
+
+const DEFAULT_TV = ["SPTV"]
+
+function getTv(home_team, away_team) {
+  return TV_BY_TEAMS[`${home_team}|${away_team}`] || DEFAULT_TV
+}
 
 const FLAGS = {
   "Mexico":"🇲🇽","South Africa":"🇿🇦","South Korea":"🇰🇷","Czech Republic":"🇨🇿",
@@ -121,20 +129,27 @@ function StatusBadge({ match }) {
 
 function TVBadge({ canal }) {
   const s = TV_COLORS[canal] || { bg: "#444", text: "#fff" }
-  return (
-    <span style={{
-      background: s.bg, color: s.text,
-      fontSize: "9px", fontWeight: 700, padding: "1px 5px",
-      borderRadius: "3px", letterSpacing: "0.03em", whiteSpace: "nowrap",
-    }}>{canal}</span>
-  )
+  const style = {
+    background: s.bg, color: s.text,
+    fontSize: "9px", fontWeight: 700, padding: "1px 5px",
+    borderRadius: "3px", letterSpacing: "0.03em", whiteSpace: "nowrap",
+    textDecoration: "none", display: "inline-block",
+  }
+  if (canal === "LV") {
+    return (
+      <a href="https://youtube.com/@livemodetv_pt" target="_blank" rel="noopener noreferrer" style={style}>
+        {canal}
+      </a>
+    )
+  }
+  return <span style={style}>{canal}</span>
 }
 
 function MatchRow({ match }) {
   const t1    = match.home_team
   const t2    = match.away_team
   const isPT  = hasPortugal(t1, t2)
-  const tv    = TV_BY_MATCH[match.match_number] || DEFAULT_TV
+  const tv    = getTv(match.home_team, match.away_team)
   const hora  = toLocalHour(match.kickoff_utc)
   const past  = match.status === "finished" || match.phase === "FT"
   const live  = match.status === "live" || match.phase === "IN_PLAY"
@@ -309,7 +324,7 @@ function KnockoutMatchCard({ match }) {
   const t1    = match.home_team || match.t1_label || "A determinar"
   const t2    = match.away_team || match.t2_label || "A determinar"
   const isPT  = hasPortugal(t1, t2)
-  const tv    = TV_BY_MATCH[match.match_number] || DEFAULT_TV
+  const tv    = getTv(match.home_team, match.away_team)
   const live  = match.status === "live" || match.phase === "IN_PLAY"
   const past  = match.status === "finished" || match.phase === "FT"
 
@@ -416,7 +431,7 @@ function TvTab() {
         </div>
       ))}
       <div style={{ marginTop: "16px", padding: "12px", background: "rgba(0,87,168,0.15)", borderRadius: "8px", border: "1px solid rgba(0,87,168,0.3)", lineHeight: "2.2" }}>
-        <div style={{ fontWeight: 700, color: "#6fa8dc", marginBottom: "6px" }}>🇵🇹 Portugal — Grupo K</div>
+        <div style={{ fontWeight: 700, color: "#6fa8dc", marginBottom: "6px" }}>🇵🇹 Portugal -- Grupo K</div>
         <div>17 Jun · Portugal vs RD Congo · <TVBadge canal="SIC" /></div>
         <div>23 Jun · Portugal vs Uzbequistão · <TVBadge canal="TVI" /></div>
         <div>28 Jun · Colômbia vs Portugal · <TVBadge canal="RTP1" /></div>
@@ -462,9 +477,7 @@ export default function App() {
     try {
       // live.json is fetched and written by the GitHub Actions workflow
       // It lives at /live.json in the deployed site (served from /public in dev)
-      const base = import.meta.env.BASE_URL
-      const res = await fetch(`${base}live.json?t=${Date.now()}`)
-      //const res = await fetch(`/live.json?t=${Date.now()}`)
+      const res = await fetch(`/live.json?t=${Date.now()}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = await res.json()
       setData(json)
