@@ -3,11 +3,11 @@ import { useState, useEffect, useRef } from "react"
 // ── STATIC DATA ───────────────────────────────────────────────────────────────
 
 const TV_COLORS = {
-  "RTP1": { bg: "#006400", text: "#fff" },
+  "RTP1": { bg: "#0000FF", text: "#fff" },
   "SIC":  { bg: "#FF6B00", text: "#fff" },
-  "TVI":  { bg: "#0057A8", text: "#fff" },
-  "LV":   { bg: "#1DB954", text: "#fff" },
-  "SPTV": { bg: "#8B0000", text: "#fff" },
+  "TVI":  { bg: "#E19127", text: "#fff" },
+  "LV":   { bg: "#F20202", text: "#fff" },
+  "SPTV": { bg: "#F7E400", text: "#fff" },
 }
 
 // TV overrides keyed by 'home_team|away_team' -- matches API team names exactly
@@ -281,9 +281,9 @@ function GroupsTab({ standings }) {
             <tbody>
               {(group.standings || []).map((row, i) => {
                 const isQualified = i < 2
-                const isPT = row.team === "Portugal"
+                const isPT = row.team_name === "Portugal"
                 return (
-                  <tr key={row.team} style={{
+                  <tr key={row.team_name} style={{
                     borderTop: "1px solid rgba(255,255,255,0.05)",
                     background: isPT ? "rgba(0,87,168,0.1)" : "transparent",
                   }}>
@@ -294,7 +294,7 @@ function GroupsTab({ standings }) {
                         display: "flex", alignItems: "center", justifyContent: "center",
                         fontSize: "8px", fontWeight: 700, color: isQualified ? "#000" : "#666",
                       }}>{i + 1}</span>
-                      {flag(row.team)} <span style={{ color: isPT ? "#6fa8dc" : "#ddd", fontWeight: isPT ? 700 : 400 }}>{toPT(row.team)}</span>
+                      {flag(row.team_name)} <span style={{ color: isPT ? "#6fa8dc" : "#ddd", fontWeight: isPT ? 700 : 400 }}>{toPT(row.team_name)}</span>
                     </td>
                     <td style={{ textAlign: "center", color: "#aaa" }}>{row.played ?? 0}</td>
                     <td style={{ textAlign: "center", color: "#aaa" }}>{row.won ?? 0}</td>
@@ -377,12 +377,12 @@ function RoundColumn({ title, matches, color = "#666" }) {
 }
 
 function KnockoutTab({ matches }) {
-  const r32  = matches.filter(m => m.round === "round_of_32"  || m.round === "Round of 32")
-  const r16  = matches.filter(m => m.round === "round_of_16"  || m.round === "Round of 16")
-  const qf   = matches.filter(m => m.round === "quarterfinal" || m.round === "Quarter-finals")
-  const sf   = matches.filter(m => m.round === "semifinal"    || m.round === "Semi-finals")
-  const fin  = matches.filter(m => m.round === "final"        || m.round === "Final")
-  const thrd = matches.filter(m => m.round === "third_place"  || m.round === "Third Place")
+  const r32  = matches.filter(m => m.round === "R32")
+  const r16  = matches.filter(m => m.round === "R16")
+  const qf   = matches.filter(m => m.round === "QF")
+  const sf   = matches.filter(m => m.round === "SF")
+  const fin  = matches.filter(m => m.round === "final")
+  const thrd = matches.filter(m => m.round === "3rd")
 
   return (
     <div>
