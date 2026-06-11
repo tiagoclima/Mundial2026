@@ -483,7 +483,7 @@ export default function App() {
       setData(json)
       setLastUpdate(new Date(json.fetched_at))
     } catch (e) {
-      setError("Não foi possível carregar os dados ao vivo.")
+      setError("Não foi possível carregar os dados ao vivo. Erro: " + e )
     }
   }
 
