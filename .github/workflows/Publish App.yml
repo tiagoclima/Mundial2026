@@ -31,7 +31,7 @@ jobs:
         # The build picks up public/live.json automatically
 
       - name: Copy live data into dist
-        run: cp data/live.json dist/live.json
+        run: cp public/live.json dist/live.json
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
