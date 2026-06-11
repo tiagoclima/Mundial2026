@@ -30,10 +30,13 @@ jobs:
         run: npm run build
         # The build picks up public/live.json automatically
 
+      - name: Copy live data into dist
+        run: cp data/live.json dist/live.json
+
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./dist
-          force_orphan: true        # ← replaces gh-pages branch instead of appending commits
+          # force_orphan: true        # ← replaces gh-pages branch instead of appending commits
           commit_message: 'deploy'  # single generic message, history never grows
