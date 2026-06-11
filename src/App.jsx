@@ -5,9 +5,9 @@ import { useState, useEffect, useRef } from "react"
 const TV_COLORS = {
   "RTP1": { bg: "#0000FF", text: "#fff" },
   "SIC":  { bg: "#FF6B00", text: "#fff" },
-  "TVI":  { bg: "#E19127", text: "#fff" },
+  "TVI":  { bg: "#E19127", text: "#000" },
   "LV":   { bg: "#F20202", text: "#fff" },
-  "SPTV": { bg: "#F7E400", text: "#fff" },
+  "SPTV": { bg: "#F7E400", text: "#000" },
 }
 
 // TV overrides keyed by 'home_team|away_team' -- matches API team names exactly
