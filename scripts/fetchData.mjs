@@ -1,5 +1,5 @@
 // scripts/fetchData.mjs
-// Smart fetcher -- respects 400 req/day budget and adapts frequency to match schedule.
+// Smart fetcher — respects 400 req/day budget and adapts frequency to match schedule.
 //
 // State file: public/api-state.json (persisted in gh-pages branch between runs)
 // Live data:  public/live.json
@@ -52,7 +52,7 @@ function loadState() {
       // Reset counter if it's a new UTC day
       const todayUTC = new Date().toISOString().slice(0, 10)
       if (s.date !== todayUTC) {
-        console.log(`New day (${todayUTC}) -- resetting request counter (was ${s.requests_today})`)
+        console.log(`New day (${todayUTC}) — resetting request counter (was ${s.requests_today})`)
         return { ...defaults, ...s, date: todayUTC, requests_today: 0 }
       }
       return { ...defaults, ...s }
@@ -151,7 +151,7 @@ async function main() {
 
   // Hard budget check
   if (state.requests_today >= DAILY_LIMIT) {
-    console.log('Daily budget exhausted -- skipping all API calls')
+    console.log('Daily budget exhausted — skipping all API calls')
     return
   }
 
@@ -161,52 +161,59 @@ async function main() {
   console.log(`Context: live=${ctx.liveMatches.length} recentEnd=${ctx.recentlyEnded.length} upcoming2h=${ctx.upcomingNext2h.length} minsToNext=${ctx.minsToNext}`)
 
   const secAgo = (ts) => ts ? Math.round((now - new Date(ts)) / 1000) : Infinity
-  const minAgo = (ts) => secAgo(ts) / 60
-
-  // ── DECIDE: fetch /matches? ───────────────────────────────────────────────
+  // ── DECIDE: fetch /matches? ─────────────────────────────────────────────
   let fetchMatches = false
   let matchReason  = ''
 
-  if (ctx.liveMatches.length > 0) {
-    // Game in progress -- update every run (cron controls frequency)
+  // Compute time-based match windows from kickoff_utc (independent of cached status).
+  // Guards against stale live.json showing wrong status.
+  // Windows: live (0-130min elapsed) | post (130-170) | pre15m | pre1h | pre3h
+  let gameWindow = 'none'
+
+  for (const m of (live.matches || [])) {
+    if (!m.kickoff_utc) continue
+    if (m.status === 'completed' || m.phase === 'FT' || m.phase === 'FT_PEN') continue
+    const ko      = new Date(m.kickoff_utc).getTime()
+    const elapsed = (now - ko) / MIN   // negative = future
+    const minsTo  = -elapsed           // positive = minutes until kickoff
+
+    let w = 'none'
+    if      (elapsed >= 0   && elapsed <= 130) w = 'live'
+    else if (elapsed > 130  && elapsed <= 170) w = 'post'
+    else if (minsTo  >= 0   && minsTo  <= 15)  w = 'pre15m'
+    else if (minsTo  > 15   && minsTo  <= 60)  w = 'pre1h'
+    else if (minsTo  > 60   && minsTo  <= 180) w = 'pre3h'
+
+    const priority = { live:5, post:4, pre15m:3, pre1h:2, pre3h:1, none:0 }
+    if ((priority[w] || 0) > (priority[gameWindow] || 0)) gameWindow = w
+  }
+
+  const apiConfirmedLive = ctx.liveMatches.length > 0
+  console.log('  gameWindow=' + gameWindow + ' apiLive=' + apiConfirmedLive)
+
+  if (apiConfirmedLive || gameWindow === 'live') {
     fetchMatches = true
-    matchReason  = 'game live'
-  } else if (ctx.recentlyEnded.length > 0) {
-    // Game ended recently -- keep polling for 40 min to catch final score
+    matchReason  = apiConfirmedLive ? 'live (API confirmed)' : 'live (by kickoff time)'
+  } else if (gameWindow === 'post') {
     fetchMatches = true
-    matchReason  = 'game recently ended'
-  } else if (ctx.upcomingNext2h.length > 0) {
-    // Game starting soon -- poll every 15 min
+    matchReason  = 'post-game (catching final score)'
+  } else if (gameWindow === 'pre15m') {
+    fetchMatches = true
+    matchReason  = 'pre-game <15min'
+  } else if (gameWindow === 'pre1h') {
     fetchMatches = minAgo(state.last_matches_fetch) >= 14
-    matchReason  = 'game starting within 2h'
-  } else if (ctx.minsToNext !== null && ctx.minsToNext < 60) {
-    fetchMatches = minAgo(state.last_matches_fetch) >= 30
-    matchReason  = 'game within 1h'
+    matchReason  = 'pre-game <1h (15min interval)'
+  } else if (gameWindow === 'pre3h') {
+    fetchMatches = minAgo(state.last_matches_fetch) >= 29
+    matchReason  = 'pre-game <3h (30min interval)'
+  } else if (ctx.minsToNext !== null && ctx.minsToNext < 360) {
+    fetchMatches = minAgo(state.last_matches_fetch) >= 119
+    matchReason  = 'next game <6h (2h interval)'
   } else {
-    // Dead hours -- only update every 2 hours
-    fetchMatches = minAgo(state.last_matches_fetch) >= 120
-    matchReason  = 'dead hours (2h interval)'
+    fetchMatches = minAgo(state.last_matches_fetch) >= 179
+    matchReason  = 'dead hours (3h interval)'
   }
 
-  // ── DECIDE: which groups to fetch standings for? ──────────────────────────
-  const groupsDone      = computeGroupsDone(live.matches || [])
-  const activeGroups    = [...ctx.activeGroups].filter(g => !groupsDone.includes(g))
-  const GROUP_LETTERS   = ['A','B','C','D','E','F','G','H','I','J','K','L']
-  const pendingGroups   = GROUP_LETTERS.filter(g => !groupsDone.includes(g))
-
-  let groupsToFetch = []
-
-  if (ctx.recentlyEnded.length > 0 && activeGroups.length > 0) {
-    // Fetch only affected groups after a game ends (poll every 5 min for 40 min)
-    groupsToFetch = activeGroups.filter(g =>
-      minAgo(state.groups_last_fetch[g]) >= 4
-    )
-  } else if (ctx.liveMatches.length === 0) {
-    // No live games -- refresh pending groups every 2 hours
-    groupsToFetch = pendingGroups.filter(g =>
-      minAgo(state.groups_last_fetch[g]) >= 119
-    )
-  }
   // If live game: don't refresh standings (scores mid-game are irrelevant for standings)
 
   // ── BUDGET CHECK ──────────────────────────────────────────────────────────
@@ -261,7 +268,7 @@ async function main() {
   state.groups_done     = computeGroupsDone(matches)
   saveState(state)
 
-  console.log(`Done -- ${requestsThisRun} requests this run, ${state.requests_today} today total`)
+  console.log(`Done — ${requestsThisRun} requests this run, ${state.requests_today} today total`)
   console.log(`Groups done: [${state.groups_done.join(',')||'none'}]`)
 }
 
