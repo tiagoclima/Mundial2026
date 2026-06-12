@@ -2,6 +2,20 @@ import { useState, useEffect, useRef } from "react"
 
 // ── STATIC DATA ───────────────────────────────────────────────────────────────
 
+
+const PHASE_LABEL = {
+  "PRE":    "Em breve",
+  "1H":     "1ª Parte",
+  "HT":     "Intervalo",
+  "2H":     "2ª Parte",
+  "ET1":    "Prol. 1",
+  "ET2":    "Prol. 2",
+  "PEN":    "Penáltis",
+  "FT":     "Terminado",
+  "FT_PEN": "Terminado",
+}
+function phaseLabel(phase) { return PHASE_LABEL[phase] || phase || "Ao vivo" }
+
 const TV_COLORS = {
   "RTP1": { bg: "#006400", text: "#fff" },
   "SIC":  { bg: "#FF6B00", text: "#fff" },
@@ -206,7 +220,7 @@ function StatusBadge({ match }) {
   if (isLive) return (
     <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
       <span style={{width:6,height:6,borderRadius:"50%",background:"#f00",animation:"pulse 1s infinite"}}/>
-      <span style={{color:"#f55",fontSize:"10px",fontWeight:700}}>{ph||"AO VIVO"}</span>
+      <span style={{color:"#f55",fontSize:"10px",fontWeight:700}}>{phaseLabel(ph)}</span>
       <span style={{color:"#fff",fontWeight:700,fontSize:"13px"}}>{home_score}–{away_score}</span>
     </span>
   )
@@ -223,7 +237,7 @@ function MatchRow({ match }) {
   const isLive=match.status==="live"||match.phase==="1H"||match.phase==="HT"||match.phase==="2H"||match.phase==="ET1"||match.phase==="ET2"||match.phase==="PEN"
   const past=isDone
 
-  // Determine winner for bold -- home wins if home_score > away_score, etc.
+  // Determine winner for bold — home wins if home_score > away_score, etc.
   const s1=match.home_score ?? null
   const s2=match.away_score ?? null
   const homePen=match.home_pen ?? null
@@ -246,7 +260,7 @@ function MatchRow({ match }) {
         {isLive
           ? <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
               <span style={{width:6,height:6,borderRadius:"50%",background:"#f00",animation:"pulse 1s infinite",flexShrink:0}}/>
-              <span style={{color:"#f55",fontSize:"10px",fontWeight:700}}>{match.phase||"AO VIVO"}</span>
+              <span style={{color:"#f55",fontSize:"10px",fontWeight:700}}>{phaseLabel(match.phase)}</span>
             </span>
           : <span style={{fontSize:"10px",color:"#777",fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{hora}</span>
         }
@@ -276,7 +290,7 @@ function MatchRow({ match }) {
           )}
         </div>
 
-        {/* TV badges -- vertical stack */}
+        {/* TV badges — vertical stack */}
         <div style={{display:"flex",flexDirection:"column",gap:3,alignItems:"flex-end",flexShrink:0}}>
           {tv.map(t=><TVBadge key={t} canal={t}/>)}
         </div>
@@ -389,7 +403,7 @@ function GroupsTab({ standings }) {
   )
 }
 
-// ── TAB: ELIMINATÓRIAS -- SVG BRACKET ─────────────────────────────────────────
+// ── TAB: ELIMINATÓRIAS — SVG BRACKET ─────────────────────────────────────────
 
 // Card dimensions
 const CW = 158  // card width
@@ -551,7 +565,7 @@ function KnockoutTab({ matches }) {
     })
   })
 
-  // 3rd place card -- positioned below Final
+  // 3rd place card — positioned below Final
   const finalY = HEADER_H + getCardY("Final", 0)
   const thirdY = finalY + CH + 30
   const finalX = getColX("Final")
@@ -617,7 +631,7 @@ function TvTab() {
         </div>
       ))}
       <div style={{marginTop:16,padding:12,background:"rgba(0,87,168,0.15)",borderRadius:8,border:"1px solid rgba(0,87,168,0.3)",lineHeight:2.2}}>
-        <div style={{fontWeight:700,color:"#6fa8dc",marginBottom:6}}>Portugal -- Grupo K</div>
+        <div style={{fontWeight:700,color:"#6fa8dc",marginBottom:6}}>Portugal — Grupo K</div>
         <div>17 Jun · Portugal vs RD Congo · <TVBadge canal="SIC"/></div>
         <div>23 Jun · Portugal vs Uzbequistão · <TVBadge canal="TVI"/></div>
         <div>28 Jun · Colômbia vs Portugal · <TVBadge canal="RTP1"/></div>
@@ -651,7 +665,7 @@ export default function App() {
     }
   }
 
-  // Detect live games -- refresh every 60s if live, otherwise every 5 min
+  // Detect live games — refresh every 60s if live, otherwise every 5 min
   const hasLive = (data?.matches||[]).some(m=>
     m.status==="live"||["1H","HT","2H","ET1","ET2","PEN"].includes(m.phase)
   )
