@@ -161,6 +161,7 @@ async function main() {
   console.log(`Context: live=${ctx.liveMatches.length} recentEnd=${ctx.recentlyEnded.length} upcoming2h=${ctx.upcomingNext2h.length} minsToNext=${ctx.minsToNext}`)
 
   const secAgo = (ts) => ts ? Math.round((now - new Date(ts)) / 1000) : Infinity
+  const minAgo = (ts) => ts ? Math.round((now - new Date(ts)) / MIN)  : Infinity
   // ── DECIDE: fetch /matches? ─────────────────────────────────────────────
   let fetchMatches = false
   let matchReason  = ''
