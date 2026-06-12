@@ -1,8 +1,8 @@
 name: Build & Deploy
 
 on:
-  schedule:
-    - cron: '*/15 * * * *'   # every 15 min — fetchData.mjs decides internally what to call
+  #schedule:
+  #  - cron: '*/15 * * * *'   # every 15 min — fetchData.mjs decides internally what to call
 
   push:
     branches: [main]
