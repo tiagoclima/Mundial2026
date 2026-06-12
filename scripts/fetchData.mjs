@@ -22,6 +22,7 @@ const OUT_DIR     = join(__dirname, '..', 'public')
 const LIVE_FILE   = join(OUT_DIR, 'live.json')
 const STATE_FILE  = join(OUT_DIR, 'api-state.json')
 const DAILY_LIMIT = 400
+const MIN = 60 * 1000  // milliseconds per minute
 
 if (!API_KEY) { console.error('WC_API_KEY not set'); process.exit(1) }
 
@@ -79,7 +80,6 @@ function loadLive() {
 
 function getMatchContext(matches) {
   const now = Date.now()
-  const MIN = 60 * 1000
   const MATCH_DURATION = 115 * MIN   // ~115 min including stoppage/HT
 
   const liveMatches     = []
