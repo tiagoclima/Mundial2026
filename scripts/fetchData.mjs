@@ -216,6 +216,25 @@ async function main() {
 
   // If live game: don't refresh standings (scores mid-game are irrelevant for standings)
 
+  // ── DECIDE: which groups to fetch standings for? ────────────────────────
+  const groupsDone    = computeGroupsDone(live.matches || [])
+  const activeGroups  = [...ctx.activeGroups].filter(g => !groupsDone.includes(g))
+  const GROUP_LETTERS = ['A','B','C','D','E','F','G','H','I','J','K','L']
+  const pendingGroups = GROUP_LETTERS.filter(g => !groupsDone.includes(g))
+
+  let groupsToFetch = []
+
+  if (gameWindow === 'post' && activeGroups.length > 0) {
+    // Game just ended — poll affected groups every 5 min for ~40 min
+    groupsToFetch = activeGroups.filter(g => minAgo(state.groups_last_fetch[g]) >= 4)
+  } else if (gameWindow === 'live' || gameWindow === 'pre15m') {
+    // Mid-game or imminent — skip standings (will update in post window)
+    groupsToFetch = []
+  } else {
+    // No live game — refresh pending groups every 2h
+    groupsToFetch = pendingGroups.filter(g => minAgo(state.groups_last_fetch[g]) >= 119)
+  }
+
   // ── BUDGET CHECK ──────────────────────────────────────────────────────────
   const plannedRequests = (fetchMatches ? 1 : 0) + groupsToFetch.length
   if (state.requests_today + plannedRequests > DAILY_LIMIT) {
