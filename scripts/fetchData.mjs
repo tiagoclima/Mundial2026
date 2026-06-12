@@ -1,75 +1,268 @@
 // scripts/fetchData.mjs
-// Runs in GitHub Actions -- fetches from wc2026api.com and writes public/live.json
-// The API key is injected via the WC_API_KEY environment variable (GitHub Secret)
-// Never commit the key to the repository.
+// Smart fetcher -- respects 400 req/day budget and adapts frequency to match schedule.
+//
+// State file: public/api-state.json (persisted in gh-pages branch between runs)
+// Live data:  public/live.json
+//
+// Decision logic per execution:
+//   1. Load api-state.json from gh-pages checkout (previous run state)
+//   2. If daily budget exhausted (>= 400) → skip all API calls, exit 0
+//   3. Determine current match context from live.json (games now, recently finished, upcoming)
+//   4. Decide which endpoints to call based on context
+//   5. Call only what's needed, update state, write live.json + api-state.json
 
-import { writeFileSync, mkdirSync } from 'fs'
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const BASE_URL  = 'https://api.wc2026api.com'
-const API_KEY   = process.env.WC_API_KEY
+const __dirname   = dirname(fileURLToPath(import.meta.url))
+const BASE_URL    = 'https://api.wc2026api.com'
+const API_KEY     = process.env.WC_API_KEY
+const OUT_DIR     = join(__dirname, '..', 'public')
+const LIVE_FILE   = join(OUT_DIR, 'live.json')
+const STATE_FILE  = join(OUT_DIR, 'api-state.json')
+const DAILY_LIMIT = 400
 
-if (!API_KEY) {
-  console.error('WC_API_KEY environment variable is not set.')
-  process.exit(1)
-}
+if (!API_KEY) { console.error('WC_API_KEY not set'); process.exit(1) }
 
-const headers = {
-  'Authorization': `Bearer ${API_KEY}`,
-  'Content-Type': 'application/json',
-}
+const headers = { 'Authorization': `Bearer ${API_KEY}`, 'Content-Type': 'application/json' }
+let requestsThisRun = 0
 
 async function fetchJSON(path) {
   const res = await fetch(`${BASE_URL}${path}`, { headers })
+  requestsThisRun++
   if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`)
   return res.json()
 }
 
-async function main() {
-  console.log('Fetching World Cup data...')
+// ── STATE ─────────────────────────────────────────────────────────────────────
 
-  // API endpoints per docs:
-  // GET /matches  -- all 104 matches with status, scores, phase
-  // GET /groups   -- all 12 groups with teams and standings
-  const [matches, groups] = await Promise.all([
-    fetchJSON('/matches'),
-    fetchJSON('/groups'),
-  ])
-
-  // /groups returns an array of group objects.
-  // Normalise to the shape the App expects: { group_name, standings: [...] }
-  // Each group from the API has: { name, teams: [{ name, code, ... }] }
-  // Standings (W/D/L/pts) come from /groups/{id} -- fetch each group individually.
-  const GROUP_LETTERS = ['A','B','C','D','E','F','G','H','I','J','K','L']
-
-  const standingsArr = await Promise.all(
-    GROUP_LETTERS.map(async (letter) => {
-      const g = await fetchJSON(`/groups/${letter}`)
-      // API returns standings inside the group object -- adapt as needed
-      return {
-        group_name: letter,
-        standings: g.standings || g.teams || [],
-      }
-    })
-  )
-
-  const payload = {
-    fetched_at: new Date().toISOString(),
-    matches,
-    standings: standingsArr,
+function loadState() {
+  const defaults = {
+    date: '',           // UTC date string YYYY-MM-DD
+    requests_today: 0,
+    last_matches_fetch: null,   // ISO timestamp
+    last_standings_fetch: null, // ISO timestamp
+    groups_last_fetch: {},      // { A: ISO, B: ISO, ... }
+    groups_done: [],            // groups where all matches are completed
   }
-
-  const outDir  = join(__dirname, '..', 'public')
-  const outFile = join(outDir, 'live.json')
-  mkdirSync(outDir, { recursive: true })
-  writeFileSync(outFile, JSON.stringify(payload, null, 2))
-
-  console.log(`Written ${outFile} -- ${matches.length ?? '?'} matches, ${standingsArr.length} groups`)
+  if (existsSync(STATE_FILE)) {
+    try {
+      const s = JSON.parse(readFileSync(STATE_FILE, 'utf8'))
+      // Reset counter if it's a new UTC day
+      const todayUTC = new Date().toISOString().slice(0, 10)
+      if (s.date !== todayUTC) {
+        console.log(`New day (${todayUTC}) -- resetting request counter (was ${s.requests_today})`)
+        return { ...defaults, ...s, date: todayUTC, requests_today: 0 }
+      }
+      return { ...defaults, ...s }
+    } catch { return defaults }
+  }
+  return { ...defaults, date: new Date().toISOString().slice(0, 10) }
 }
 
-main().catch(err => {
-  console.error(err)
-  process.exit(1)
-})
+function saveState(state) {
+  mkdirSync(OUT_DIR, { recursive: true })
+  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2))
+}
+
+// ── LIVE DATA ─────────────────────────────────────────────────────────────────
+
+function loadLive() {
+  if (existsSync(LIVE_FILE)) {
+    try { return JSON.parse(readFileSync(LIVE_FILE, 'utf8')) } catch {}
+  }
+  return { fetched_at: null, matches: [], standings: [] }
+}
+
+// ── MATCH CONTEXT ─────────────────────────────────────────────────────────────
+
+function getMatchContext(matches) {
+  const now = Date.now()
+  const MIN = 60 * 1000
+  const MATCH_DURATION = 115 * MIN   // ~115 min including stoppage/HT
+
+  const liveMatches     = []
+  const recentlyEnded   = []   // finished in last 40 min
+  const upcomingNext2h  = []   // kickoff within next 2 hours
+  const activeGroups    = new Set()   // groups with live or recent matches
+
+  for (const m of matches) {
+    if (!m.kickoff_utc) continue
+    const ko = new Date(m.kickoff_utc).getTime()
+    const isLive    = m.status === 'live' ||
+                      ['1H','HT','2H','ET1','ET2','PEN'].includes(m.phase)
+    const isDone    = m.status === 'completed' || ['FT','FT_PEN'].includes(m.phase)
+    const endEst    = ko + MATCH_DURATION
+    const recentEnd = isDone && (now - endEst) < 40 * MIN && (now - endEst) > -5 * MIN
+
+    if (isLive) {
+      liveMatches.push(m)
+      if (m.group_name) activeGroups.add(m.group_name)
+    }
+    if (recentEnd) {
+      recentlyEnded.push(m)
+      if (m.group_name) activeGroups.add(m.group_name)
+    }
+    if (!isLive && !isDone && ko > now && ko - now < 2 * 60 * MIN) {
+      upcomingNext2h.push(m)
+    }
+  }
+
+  // Next match kickoff (any match not yet started)
+  const future = matches
+    .filter(m => !['completed'].includes(m.status) && !['FT','FT_PEN'].includes(m.phase))
+    .filter(m => m.kickoff_utc && new Date(m.kickoff_utc).getTime() > now)
+    .sort((a, b) => new Date(a.kickoff_utc) - new Date(b.kickoff_utc))
+  const nextKickoff = future[0] ? new Date(future[0].kickoff_utc).getTime() : null
+  const minsToNext  = nextKickoff ? Math.round((nextKickoff - now) / MIN) : null
+
+  return { liveMatches, recentlyEnded, upcomingNext2h, activeGroups, minsToNext }
+}
+
+// ── GROUPS DONE CHECK ─────────────────────────────────────────────────────────
+
+function computeGroupsDone(matches) {
+  const groupMatchCount  = {}
+  const groupDoneCount   = {}
+  const GROUP_LETTERS    = ['A','B','C','D','E','F','G','H','I','J','K','L']
+
+  for (const m of matches) {
+    if (m.round !== 'group' || !m.group_name) continue
+    groupMatchCount[m.group_name]  = (groupMatchCount[m.group_name]  || 0) + 1
+    if (m.status === 'completed' || ['FT','FT_PEN'].includes(m.phase))
+      groupDoneCount[m.group_name] = (groupDoneCount[m.group_name] || 0) + 1
+  }
+
+  return GROUP_LETTERS.filter(g =>
+    groupMatchCount[g] && groupMatchCount[g] > 0 &&
+    groupMatchCount[g] === (groupDoneCount[g] || 0)
+  )
+}
+
+// ── MAIN ──────────────────────────────────────────────────────────────────────
+
+async function main() {
+  const now   = new Date()
+  const state = loadState()
+  const live  = loadLive()
+
+  console.log(`[${now.toISOString()}] Requests today so far: ${state.requests_today}/${DAILY_LIMIT}`)
+
+  // Hard budget check
+  if (state.requests_today >= DAILY_LIMIT) {
+    console.log('Daily budget exhausted -- skipping all API calls')
+    return
+  }
+
+  const remaining = DAILY_LIMIT - state.requests_today
+  const ctx       = getMatchContext(live.matches || [])
+
+  console.log(`Context: live=${ctx.liveMatches.length} recentEnd=${ctx.recentlyEnded.length} upcoming2h=${ctx.upcomingNext2h.length} minsToNext=${ctx.minsToNext}`)
+
+  const secAgo = (ts) => ts ? Math.round((now - new Date(ts)) / 1000) : Infinity
+  const minAgo = (ts) => secAgo(ts) / 60
+
+  // ── DECIDE: fetch /matches? ───────────────────────────────────────────────
+  let fetchMatches = false
+  let matchReason  = ''
+
+  if (ctx.liveMatches.length > 0) {
+    // Game in progress -- update every run (cron controls frequency)
+    fetchMatches = true
+    matchReason  = 'game live'
+  } else if (ctx.recentlyEnded.length > 0) {
+    // Game ended recently -- keep polling for 40 min to catch final score
+    fetchMatches = true
+    matchReason  = 'game recently ended'
+  } else if (ctx.upcomingNext2h.length > 0) {
+    // Game starting soon -- poll every 15 min
+    fetchMatches = minAgo(state.last_matches_fetch) >= 14
+    matchReason  = 'game starting within 2h'
+  } else if (ctx.minsToNext !== null && ctx.minsToNext < 60) {
+    fetchMatches = minAgo(state.last_matches_fetch) >= 30
+    matchReason  = 'game within 1h'
+  } else {
+    // Dead hours -- only update every 2 hours
+    fetchMatches = minAgo(state.last_matches_fetch) >= 120
+    matchReason  = 'dead hours (2h interval)'
+  }
+
+  // ── DECIDE: which groups to fetch standings for? ──────────────────────────
+  const groupsDone      = computeGroupsDone(live.matches || [])
+  const activeGroups    = [...ctx.activeGroups].filter(g => !groupsDone.includes(g))
+  const GROUP_LETTERS   = ['A','B','C','D','E','F','G','H','I','J','K','L']
+  const pendingGroups   = GROUP_LETTERS.filter(g => !groupsDone.includes(g))
+
+  let groupsToFetch = []
+
+  if (ctx.recentlyEnded.length > 0 && activeGroups.length > 0) {
+    // Fetch only affected groups after a game ends (poll every 5 min for 40 min)
+    groupsToFetch = activeGroups.filter(g =>
+      minAgo(state.groups_last_fetch[g]) >= 4
+    )
+  } else if (ctx.liveMatches.length === 0) {
+    // No live games -- refresh pending groups every 2 hours
+    groupsToFetch = pendingGroups.filter(g =>
+      minAgo(state.groups_last_fetch[g]) >= 119
+    )
+  }
+  // If live game: don't refresh standings (scores mid-game are irrelevant for standings)
+
+  // ── BUDGET CHECK ──────────────────────────────────────────────────────────
+  const plannedRequests = (fetchMatches ? 1 : 0) + groupsToFetch.length
+  if (state.requests_today + plannedRequests > DAILY_LIMIT) {
+    // Trim groups to stay within budget
+    const budgetForGroups = remaining - (fetchMatches ? 1 : 0)
+    groupsToFetch = groupsToFetch.slice(0, Math.max(0, budgetForGroups))
+    console.log(`Budget trim: can fetch ${budgetForGroups} groups`)
+  }
+
+  console.log(`Plan: matches=${fetchMatches} (${matchReason}) groups=[${groupsToFetch.join(',')}]`)
+
+  if (!fetchMatches && groupsToFetch.length === 0) {
+    console.log('Nothing to fetch this run')
+    return
+  }
+
+  // ── FETCH ─────────────────────────────────────────────────────────────────
+  let matches = live.matches || []
+  let standings = live.standings || []
+
+  if (fetchMatches) {
+    matches = await fetchJSON('/matches')
+    state.last_matches_fetch = now.toISOString()
+    console.log(`  /matches → ${matches.length} matches`)
+  }
+
+  for (const letter of groupsToFetch) {
+    const g = await fetchJSON(`/groups/${letter}`)
+    const idx = standings.findIndex(s => s.group_name === letter)
+    const entry = { group_name: letter, standings: g.standings || g.teams || [] }
+    if (idx >= 0) standings[idx] = entry
+    else standings.push(entry)
+    state.groups_last_fetch[letter] = now.toISOString()
+    console.log(`  /groups/${letter} → ${entry.standings.length} teams`)
+  }
+
+  // ── WRITE ─────────────────────────────────────────────────────────────────
+  const payload = {
+    fetched_at:    now.toISOString(),
+    standings_at:  groupsToFetch.length > 0 ? now.toISOString() : (live.standings_at || null),
+    matches,
+    standings,
+  }
+
+  mkdirSync(OUT_DIR, { recursive: true })
+  writeFileSync(LIVE_FILE, JSON.stringify(payload, null, 2))
+
+  // Update state
+  state.requests_today += requestsThisRun
+  state.groups_done     = computeGroupsDone(matches)
+  saveState(state)
+
+  console.log(`Done -- ${requestsThisRun} requests this run, ${state.requests_today} today total`)
+  console.log(`Groups done: [${state.groups_done.join(',')||'none'}]`)
+}
+
+main().catch(err => { console.error(err); process.exit(1) })
