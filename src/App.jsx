@@ -16,14 +16,20 @@ const PHASE_LABEL = {
 }
 function phaseLabel(phase) { return PHASE_LABEL[phase] || phase || "Ao vivo" }
 
-const TV_COLORS = {
+const TV_COLORS_old = {
   "RTP1": { bg: "#006400", text: "#fff" },
   "SIC":  { bg: "#FF6B00", text: "#fff" },
   "TVI":  { bg: "#0057A8", text: "#fff" },
   "LV":   { bg: "#1DB954", text: "#fff" },
   "SPTV": { bg: "#8B0000", text: "#fff" },
 }
-
+const TV_COLORS = {
+  "RTP1": { bg: "#0000FF", text: "#fff" },
+  "SIC":  { bg: "#FF6B00", text: "#fff" },
+  "TVI":  { bg: "#E19127", text: "#000" },
+  "LV":   { bg: "#F20202", text: "#fff" },
+  "SPTV": { bg: "#F7E400", text: "#000" },
+}
 const TV_BY_TEAMS = {
   "Mexico|South Africa":            ["SPTV","LV","TVI"],
   "Canada|Bosnia-Herzegovina":      ["SPTV","LV","SIC"],
