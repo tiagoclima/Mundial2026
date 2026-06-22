@@ -179,13 +179,14 @@ const BRACKET_TREE = {
   104:[101,102],
 }
 
-// Layout: R32 slots 0-15 (top to bottom), paired into R16 slots 0-7, etc.
-// Order maps slot index to match number
+// Layout: R32 slots 0-15 (top to bottom), derived strictly from the bracket tree
+// Reading the tree top-down: 104←101←97←89←[74,77], 90←[73,75], 98←93←[83,84], 94←[81,82]
+//                                    102←99←91←[76,78], 92←[79,80], 100←95←[86,88], 96←[85,87]
 const SLOT_ORDER = {
-  R32: [74,76,77,78,  79,80,81,82,  73,75,83,84,  85,86,87,88],
-  R16: [89,91,92,90,  93,94,95,96],  // must match R32 pairs
-  QF:  [97,99,98,100],
-  SF:  [101,102],
+  R32:  [74,77, 73,75, 83,84, 81,82,  76,78, 79,80, 86,88, 85,87],
+  R16:  [89,90, 93,94,  91,92, 95,96],
+  QF:   [97,98, 99,100],
+  SF:   [101,102],
   Final:[104],
 }
 
@@ -243,7 +244,7 @@ function MatchRow({ match }) {
   const isLive=match.status==="live"||match.phase==="1H"||match.phase==="HT"||match.phase==="2H"||match.phase==="ET1"||match.phase==="ET2"||match.phase==="PEN"
   const past=isDone
 
-  // Determine winner for bold — home wins if home_score > away_score, etc.
+  // Determine winner for bold -- home wins if home_score > away_score, etc.
   const s1=match.home_score ?? null
   const s2=match.away_score ?? null
   const homePen=match.home_pen ?? null
@@ -296,7 +297,7 @@ function MatchRow({ match }) {
           )}
         </div>
 
-        {/* TV badges — vertical stack */}
+        {/* TV badges -- vertical stack */}
         <div style={{display:"flex",flexDirection:"column",gap:3,alignItems:"flex-end",flexShrink:0}}>
           {tv.map(t=><TVBadge key={t} canal={t}/>)}
         </div>
@@ -409,7 +410,7 @@ function GroupsTab({ standings }) {
   )
 }
 
-// ── TAB: ELIMINATÓRIAS — SVG BRACKET ─────────────────────────────────────────
+// ── TAB: ELIMINATÓRIAS -- SVG BRACKET ─────────────────────────────────────────
 
 // Card dimensions
 const CW = 158  // card width
@@ -456,10 +457,10 @@ const ROUND_COLORS = {R32:"#666",R16:"#888",QF:"#aaa",SF:"#FFD700",Final:"#e74c3
 
 // Slot order: which match num goes in each vertical slot per round
 const SLOTS = {
-  R32: [74,76,77,78, 79,80,81,82, 73,75,83,84, 85,86,87,88],
-  R16: [89,91,92,90, 93,94,95,96],
-  QF:  [97,99,98,100],
-  SF:  [101,102],
+  R32:  [74,77, 73,75, 83,84, 81,82,  76,78, 79,80, 86,88, 85,87],
+  R16:  [89,90, 93,94,  91,92, 95,96],
+  QF:   [97,98, 99,100],
+  SF:   [101,102],
   Final:[104],
 }
 
@@ -483,28 +484,82 @@ const TOTAL_H = 16 * (CH + GAP_Y) + 60  // header space
 const TOTAL_W = ROUNDS.length * (CW + COL_GAP) + 20
 const HEADER_H = 28
 
-function BracketCard({ matchNum, apiMatches, x, y }) {
+// ── BRACKET SLOT RESOLUTION ───────────────────────────────────────────────────
+// Builds { "A": ["Mexico","USA","Qatar"], "B": [...], ... } from standings array
+// where index 0 = 1st place, 1 = 2nd, etc.
+function buildStandingsMap(standings) {
+  const map = {}
+  standings.forEach(g => {
+    const letter = g.group_name
+    map[letter] = (g.standings || []).map(row => row.team_name)
+  })
+  return map
+}
+
+// Given a static slot code like "1E", "2A", "3B", returns { code, teamName? }
+// For complex codes like "3E/F/G/I" or "V74", returns { code } only (no expansion)
+function resolveSlotTeam(code, standingsMap) {
+  if (!code) return { code }
+  // Simple pattern: digit + single letter (e.g. "1E", "2A", "3L")
+  const m = code.match(/^([123])([A-L])$/)
+  if (!m) return { code }
+  const pos = parseInt(m[1], 10) - 1   // 0-based index
+  const group = m[2]
+  const teams = standingsMap[group]
+  if (!teams || teams.length <= pos) return { code }
+  return { code, teamName: teams[pos] }
+}
+
+
+function BracketCard({ matchNum, apiMatches, standingsMap, x, y }) {
   const static_m = BRACKET_MATCHES[matchNum]
   if (!static_m) return null
 
-  // Try to get live data from API
   const api_m = apiMatches.find(m => m.match_number === matchNum)
-
   const t1 = api_m?.home_team || null
   const t2 = api_m?.away_team || null
   const score1 = api_m?.home_score
   const score2 = api_m?.away_score
   const isDone = api_m?.status === "completed" || api_m?.phase === "FT" || api_m?.phase === "FT_PEN"
   const isLive = api_m?.status === "live"
-  const isPT = t1==="Portugal"||t2==="Portugal"
+  const isPT = t1==="Portugal" || t2==="Portugal"
 
-  const label1 = t1 ? `$<Flag name={t1}/> ${toPT(t1)}` : static_m.team1
-  const label2 = t2 ? `$<Flag name={t2}/> ${toPT(t2)}` : static_m.team2
-  const isTeamLabel1 = !t1
-  const isTeamLabel2 = !t2
+  const resolved1 = !t1 ? resolveSlotTeam(static_m.team1, standingsMap) : null
+  const resolved2 = !t2 ? resolveSlotTeam(static_m.team2, standingsMap) : null
 
   const borderCol = isPT ? "rgba(0,87,168,0.6)" : isLive ? "rgba(200,0,0,0.5)" : "rgba(255,255,255,0.12)"
   const bgCol = isPT ? "rgba(0,87,168,0.18)" : "rgba(255,255,255,0.05)"
+
+  function TeamRow({ apiTeam, resolved, isPortugal, score, showScore }) {
+    if (apiTeam) {
+      return (
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{display:"flex",alignItems:"center",gap:3,fontSize:"11px",color:"#ddd",fontWeight:isPortugal?700:400,overflow:"hidden",maxWidth:110}}>
+            <Flag name={apiTeam} size={11}/>
+            <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{toPT(apiTeam)}</span>
+          </span>
+          {showScore && <span style={{fontSize:"12px",color:"#fff",fontWeight:700,marginLeft:4}}>{score??""}</span>}
+        </div>
+      )
+    }
+    if (resolved?.teamName) {
+      return (
+        <div style={{display:"flex",alignItems:"center",gap:3,overflow:"hidden"}}>
+          <Flag name={resolved.teamName} size={11}/>
+          <span style={{fontSize:"11px",color:"#555",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+            {resolved.code} <span style={{color:"#444"}}>({toPT(resolved.teamName)})</span>
+          </span>
+        </div>
+      )
+    }
+    return (
+      <div style={{overflow:"hidden"}}>
+        <span style={{fontSize:"11px",color:"#444",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"block"}}>
+          {resolved?.code || "?"}
+        </span>
+      </div>
+    )
+  }
 
   return (
     <foreignObject x={x} y={y} width={CW} height={CH}>
@@ -518,19 +573,11 @@ function BracketCard({ matchNum, apiMatches, x, y }) {
           <span>#{matchNum} · {static_m.date} {static_m.hora}</span>
           {isLive&&<span style={{color:"#f55",fontWeight:700}}>AO VIVO</span>}
         </div>
-        {/* Team 1 */}
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}>
-          <span style={{fontSize:"11px",color:isTeamLabel1?"#555":"#ddd",fontWeight:isPT&&t1==="Portugal"?700:400,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:110}}>
-            {label1}
-          </span>
-          {isDone||isLive ? <span style={{fontSize:"12px",color:"#fff",fontWeight:700,marginLeft:4}}>{score1??""}</span> : null}
+        <div style={{marginBottom:2}}>
+          <TeamRow apiTeam={t1} resolved={resolved1} isPortugal={t1==="Portugal"} score={score1} showScore={isDone||isLive}/>
         </div>
-        {/* Team 2 */}
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <span style={{fontSize:"11px",color:isTeamLabel2?"#555":"#ddd",fontWeight:isPT&&t2==="Portugal"?700:400,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:110}}>
-            {label2}
-          </span>
-          {isDone||isLive ? <span style={{fontSize:"12px",color:"#fff",fontWeight:700,marginLeft:4}}>{score2??""}</span> : null}
+        <div>
+          <TeamRow apiTeam={t2} resolved={resolved2} isPortugal={t2==="Portugal"} score={score2} showScore={isDone||isLive}/>
         </div>
         <div style={{fontSize:"8px",color:"#444",marginTop:3}}>📍 {static_m.ground}</div>
       </div>
@@ -538,7 +585,8 @@ function BracketCard({ matchNum, apiMatches, x, y }) {
   )
 }
 
-function KnockoutTab({ matches }) {
+function KnockoutTab({ matches, standings }) {
+  const standingsMap = buildStandingsMap(standings || [])
   // Build connector lines: for each round > R32, draw lines from children to parent
   const lines = []
   const lineKey = useRef(0)
@@ -571,7 +619,7 @@ function KnockoutTab({ matches }) {
     })
   })
 
-  // 3rd place card — positioned below Final
+  // 3rd place card -- positioned below Final
   const finalY = HEADER_H + getCardY("Final", 0)
   const thirdY = finalY + CH + 30
   const finalX = getColX("Final")
@@ -604,6 +652,7 @@ function KnockoutTab({ matches }) {
                 key={matchNum}
                 matchNum={matchNum}
                 apiMatches={matches}
+                standingsMap={standingsMap}
                 x={getColX(round)}
                 y={HEADER_H + getCardY(round, slotIdx)}
               />
@@ -612,7 +661,7 @@ function KnockoutTab({ matches }) {
 
           {/* 3rd place */}
           <text x={finalX+CW/2} y={thirdY-8} textAnchor="middle" fill="#666" fontSize="9" fontWeight="700" fontFamily="Inter,-apple-system,sans-serif" letterSpacing="1">3º LUGAR</text>
-          <BracketCard matchNum={103} apiMatches={matches} x={finalX} y={thirdY}/>
+          <BracketCard matchNum={103} apiMatches={matches} standingsMap={standingsMap} x={finalX} y={thirdY}/>
         </svg>
       </div>
     </div>
@@ -637,7 +686,7 @@ function TvTab() {
         </div>
       ))}
       <div style={{marginTop:16,padding:12,background:"rgba(0,87,168,0.15)",borderRadius:8,border:"1px solid rgba(0,87,168,0.3)",lineHeight:2.2}}>
-        <div style={{fontWeight:700,color:"#6fa8dc",marginBottom:6}}>Portugal — Grupo K</div>
+        <div style={{fontWeight:700,color:"#6fa8dc",marginBottom:6}}>Portugal -- Grupo K</div>
         <div>17 Jun · Portugal vs RD Congo · <TVBadge canal="SIC"/></div>
         <div>23 Jun · Portugal vs Uzbequistão · <TVBadge canal="TVI"/></div>
         <div>28 Jun · Colômbia vs Portugal · <TVBadge canal="RTP1"/></div>
@@ -671,7 +720,7 @@ export default function App() {
     }
   }
 
-  // Detect live games — refresh every 60s if live, otherwise every 5 min
+  // Detect live games -- refresh every 60s if live, otherwise every 5 min
   const hasLive = (data?.matches||[]).some(m=>
     m.status==="live"||["1H","HT","2H","ET1","ET2","PEN"].includes(m.phase)
   )
@@ -739,7 +788,7 @@ export default function App() {
             <>
               {tab==="fixtures"  &&<FixturesTab matches={matches} porOnly={porOnly} isActive={tab==="fixtures"}/>}
               {tab==="groups"    &&<GroupsTab standings={standings}/>}
-              {tab==="knockout"  &&<KnockoutTab matches={matches}/>}
+              {tab==="knockout"  &&<KnockoutTab matches={matches} standings={standings}/>}
               {tab==="tv"        &&<TvTab/>}
             </>
           )}
