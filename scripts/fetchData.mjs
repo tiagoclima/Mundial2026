@@ -123,6 +123,21 @@ function getMatchContext(matches) {
 // ── GROUPS DONE CHECK ─────────────────────────────────────────────────────────
 
 function computeGroupsDone(matches) {
+  const groupCompleted = {}
+  const GROUP_LETTERS = ['A','B','C','D','E','F','G','H','I','J','K','L']
+
+  for (const m of matches) {
+    if (m.round !== 'group' || !m.group_name) continue
+    if (m.status === 'completed' || ['FT','FT_PEN'].includes(m.phase)) {
+      groupCompleted[m.group_name] = (groupCompleted[m.group_name] || 0) + 1
+    }
+  }
+
+  return GROUP_LETTERS.filter(g => (groupCompleted[g] || 0) >= 6)
+}
+
+
+function old_computeGroupsDone(matches) {
   const groupMatchCount  = {}
   const groupDoneCount   = {}
   const GROUP_LETTERS    = ['A','B','C','D','E','F','G','H','I','J','K','L']
