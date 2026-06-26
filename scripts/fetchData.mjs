@@ -120,8 +120,18 @@ function getMatchContext(matches) {
 }
 
 // ── GROUPS DONE CHECK ─────────────────────────────────────────────────────────
+function computeGroupsDone(standings) {
+  return standings
+    .filter(group => {
+      if (!group.standings || group.standings.length < 2) return false
+      const expectedGames = group.standings.length - 1  // 3 para grupos de 4
+      return group.standings.every(team => team.played >= expectedGames)
+    })
+    .map(group => group.group_name)
+}
 
-function computeGroupsDone(matches) {
+
+function old_computeGroupsDone(matches) {
   const groupCompleted = {}
   const GROUP_LETTERS = ['A','B','C','D','E','F','G','H','I','J','K','L']
 
@@ -258,7 +268,7 @@ async function main() {
   }
 
   // ── DECIDE: which groups to fetch standings for? ──────────────────────────
-  const groupsDone    = computeGroupsDone(live.matches || [])
+  const groupsDone    = computeGroupsDone(live.standings || [])
   const activeGroups  = [...ctx.activeGroups].filter(g => !groupsDone.includes(g))
   const GROUP_LETTERS = ['A','B','C','D','E','F','G','H','I','J','K','L']
   const pendingGroups = GROUP_LETTERS.filter(g => !groupsDone.includes(g))
