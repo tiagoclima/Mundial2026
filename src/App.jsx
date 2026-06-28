@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react"
 
 // ── STATIC DATA ───────────────────────────────────────────────────────────────
 
-
 const PHASE_LABEL = {
   "PRE":    "Em breve",
   "1H":     "1ª Parte",
@@ -16,13 +15,6 @@ const PHASE_LABEL = {
 }
 function phaseLabel(phase) { return PHASE_LABEL[phase] || phase || "Ao vivo" }
 
-const TV_COLORS_old = {
-  "RTP1": { bg: "#006400", text: "#fff" },
-  "SIC":  { bg: "#FF6B00", text: "#fff" },
-  "TVI":  { bg: "#0057A8", text: "#fff" },
-  "LV":   { bg: "#1DB954", text: "#fff" },
-  "SPTV": { bg: "#8B0000", text: "#fff" },
-}
 const TV_COLORS = {
   "RTP1": { bg: "#0000FF", text: "#fff" },
   "SIC":  { bg: "#FF6B00", text: "#fff" },
@@ -112,6 +104,7 @@ function Flag({ name, size=14 }) {
   if (!url) return null
   return <img src={url} alt={name} width={size} height={size} style={{display:"inline-block",verticalAlign:"middle",marginRight:2,flexShrink:0}} loading="lazy"/>
 }
+
 const PT_NAMES = {
   "Mexico":"México","South Africa":"África do Sul","Korea Republic":"Coreia do Sul",
   "Czechia":"Rep. Checa","Czech Republic":"Rep. Checa","Canada":"Canadá",
@@ -129,11 +122,10 @@ const PT_NAMES = {
   "Panama":"Panamá","Congo DR":"RD Congo",
 }
 function toPT(n) { return PT_NAMES[n] || n }
-function flag(n) { return FLAGS[n] || "" }
-function hasPortugal(t1,t2) { return t1==="Portugal"||t2==="Portugal" }
+function hasPortugal(t1, t2) { return t1==="Portugal" || t2==="Portugal" }
 
-// ── BRACKET STATIC DATA ────────────────────────────────────────────────────────
-// Source: eliminatorias.json + UTC offsets converted to Lisbon (WEST=UTC+1)
+// ── BRACKET STATIC DATA ───────────────────────────────────────────────────────
+// dd/MM date strings are Lisbon time; hora is Lisbon time
 const BRACKET_MATCHES = {
   73: {num:73,round:"R32",team1:"2A",    team2:"2B",           date:"28/06",hora:"20:00",ground:"Los Angeles"},
   74: {num:74,round:"R32",team1:"1E",    team2:"3A/B/C/D/F",   date:"29/06",hora:"21:30",ground:"Boston"},
@@ -169,8 +161,72 @@ const BRACKET_MATCHES = {
  104: {num:104,round:"final",team1:"V101",team2:"V102",        date:"19/07",hora:"20:00",ground:"Nova Iorque"},
 }
 
-// Tree structure: which two matches feed each subsequent match
-// [top_child, bottom_child]
+// Round order for sorting knockout matches in the calendar
+const ROUND_ORDER = { "group":0, "R32":1, "R16":2, "QF":3, "SF":4, "3rd":5, "final":6 }
+
+// Phase filter definitions
+const PHASE_FILTERS = [
+  { id: "ALL",   label: "Todos" },
+  { id: "group", label: "Grupos" },
+  { id: "R32",   label: "16-avos" },
+  { id: "R16",   label: "Oitavos" },
+  { id: "QF",    label: "Quartos" },
+  { id: "SF",    label: "Meias" },
+  { id: "final", label: "Final" },
+]
+
+// Phase separator labels shown in the calendar list
+const PHASE_SEPARATOR_LABEL = {
+  "group": "FASE DE GRUPOS",
+  "R32":   "16-AVOS DE FINAL",
+  "R16":   "OITAVOS DE FINAL",
+  "QF":    "QUARTOS DE FINAL",
+  "SF":    "MEIAS-FINAIS",
+  "3rd":   "3.º LUGAR",
+  "final": "FINAL",
+}
+const PHASE_SEPARATOR_COLOR = {
+  "group": "#666",
+  "R32":   "#7a7a7a",
+  "R16":   "#8a8a8a",
+  "QF":    "#aaa",
+  "SF":    "#FFD700",
+  "3rd":   "#888",
+  "final": "#e74c3c",
+}
+
+// Convert "dd/MM" + "HH:mm" (Lisbon time) to ISO UTC string
+function staticKickoffUtc(dateStr, horaStr) {
+  // dateStr: "28/06", horaStr: "20:00"
+  const [dd, mm] = dateStr.split("/")
+  const [hh, min] = horaStr.split(":")
+  // Build ISO in Lisbon time (WEST = UTC+1 during summer)
+  // We'll just create a Date treating it as UTC+1
+  const iso = `2026-${mm}-${dd}T${hh}:${min}:00+01:00`
+  return new Date(iso).toISOString()
+}
+
+// Build a synthetic match object for knockout games not yet in the API
+function syntheticKnockoutMatch(num) {
+  const s = BRACKET_MATCHES[num]
+  if (!s) return null
+  return {
+    id: `static-${num}`,
+    match_number: num,
+    round: s.round,
+    home_team: null,
+    away_team: null,
+    kickoff_utc: staticKickoffUtc(s.date, s.hora),
+    stadium: s.ground,
+    status: "scheduled",
+    phase: "PRE",
+    home_score: null,
+    away_score: null,
+    _static: s,
+  }
+}
+
+// ── BRACKET STATIC DATA (for KnockoutTab) ────────────────────────────────────
 const BRACKET_TREE = {
   89:[74,77], 90:[73,75], 91:[76,78], 92:[79,80],
   93:[83,84], 94:[81,82], 95:[86,88], 96:[85,87],
@@ -178,16 +234,77 @@ const BRACKET_TREE = {
   101:[97,98], 102:[99,100],
   104:[101,102],
 }
-
-// Layout: R32 slots 0-15 (top to bottom), derived strictly from the bracket tree
-// Reading the tree top-down: 104←101←97←89←[74,77], 90←[73,75], 98←93←[83,84], 94←[81,82]
-//                                    102←99←91←[76,78], 92←[79,80], 100←95←[86,88], 96←[85,87]
-const SLOT_ORDER = {
+const CW = 158
+const CH = 62
+const GAP_Y = 10
+const COL_GAP = 48
+const ROUNDS = ["R32","R16","QF","SF","Final"]
+const ROUND_LABELS = {R32:"16-AVOS",R16:"OITAVOS",QF:"QUARTOS",SF:"MEIAS",Final:"FINAL"}
+const ROUND_COLORS = {R32:"#666",R16:"#888",QF:"#aaa",SF:"#FFD700",Final:"#e74c3c"}
+const SLOTS = {
   R32:  [74,77, 73,75, 83,84, 81,82,  76,78, 79,80, 86,88, 85,87],
   R16:  [89,90, 93,94,  91,92, 95,96],
   QF:   [97,98, 99,100],
   SF:   [101,102],
   Final:[104],
+}
+function buildSlotMap() {
+  const m = {}
+  Object.entries(SLOTS).forEach(([round, nums]) => {
+    nums.forEach((num,idx) => { m[num] = { round, idx } })
+  })
+  return m
+}
+const SLOT_MAP = buildSlotMap()
+function getCardY(round, slotIdx) {
+  const unit = CH + GAP_Y
+  if (round === "R32") return slotIdx * unit
+  if (round === "R16") {
+    const top = getCardY("R32", slotIdx*2)
+    const bot = getCardY("R32", slotIdx*2+1) + CH
+    return (top + bot) / 2 - CH/2
+  }
+  if (round === "QF") {
+    const top = getCardY("R16", slotIdx*2)
+    const bot = getCardY("R16", slotIdx*2+1) + CH
+    return (top + bot) / 2 - CH/2
+  }
+  if (round === "SF") {
+    const top = getCardY("QF", slotIdx*2)
+    const bot = getCardY("QF", slotIdx*2+1) + CH
+    return (top + bot) / 2 - CH/2
+  }
+  if (round === "Final") {
+    const top = getCardY("SF", 0)
+    const bot = getCardY("SF", 1) + CH
+    return (top + bot) / 2 - CH/2
+  }
+  return 0
+}
+function getColX(round) {
+  const idx = ROUNDS.indexOf(round)
+  return idx * (CW + COL_GAP)
+}
+const TOTAL_H = 16 * (CH + GAP_Y) + 60
+const TOTAL_W = ROUNDS.length * (CW + COL_GAP) + 20
+const HEADER_H = 28
+
+function buildStandingsMap(standings) {
+  const map = {}
+  standings.forEach(g => {
+    map[g.group_name] = (g.standings || []).map(row => row.team_name)
+  })
+  return map
+}
+function resolveSlotTeam(code, standingsMap) {
+  if (!code) return { code }
+  const m = code.match(/^([123])([A-L])$/)
+  if (!m) return { code }
+  const pos = parseInt(m[1], 10) - 1
+  const group = m[2]
+  const teams = standingsMap[group]
+  if (!teams || teams.length <= pos) return { code }
+  return { code, teamName: teams[pos] }
 }
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
@@ -203,10 +320,6 @@ function toDateKey(kickoff_utc) {
   if (!kickoff_utc) return ""
   return new Date(kickoff_utc).toLocaleDateString("pt-PT",{year:"numeric",month:"2-digit",day:"2-digit",timeZone:"Europe/Lisbon"})
 }
-function fmtShort(kickoff_utc) {
-  if (!kickoff_utc) return ""
-  return new Date(kickoff_utc).toLocaleDateString("pt-PT",{day:"2-digit",month:"2-digit",timeZone:"Europe/Lisbon"})
-}
 
 // ── COMPONENTS ────────────────────────────────────────────────────────────────
 function TVBadge({ canal }) {
@@ -220,49 +333,29 @@ function TVBadge({ canal }) {
   return <span style={style}>{canal}</span>
 }
 
-function StatusBadge({ match }) {
-  const {status,phase,home_score,away_score,phase: ph} = match
-  const isLive = status==="live"||ph==="1H"||ph==="HT"||ph==="2H"||ph==="ET1"||ph==="ET2"||ph==="PEN"
-  const isDone = status==="completed"||ph==="FT"||ph==="FT_PEN"
-  if (isLive) return (
-    <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
-      <span style={{width:6,height:6,borderRadius:"50%",background:"#f00",animation:"pulse 1s infinite"}}/>
-      <span style={{color:"#f55",fontSize:"10px",fontWeight:700}}>{phaseLabel(ph)}</span>
-      <span style={{color:"#fff",fontWeight:700,fontSize:"13px"}}>{home_score}–{away_score}</span>
-    </span>
-  )
-  if (isDone) return <span style={{color:"#aaa",fontSize:"13px",fontWeight:700}}>{home_score}–{away_score}{match.home_pen!=null?` (${match.home_pen}p–${match.away_pen}p)`:""}</span>
-  return null
-}
-
+// Match row for group stage (has known teams)
 function MatchRow({ match }) {
-  const t1=match.home_team, t2=match.away_team
-  const isPT=hasPortugal(t1,t2)
-  const tv=getTv(t1,t2)
-  const hora=toLocalHour(match.kickoff_utc)
-  const isDone=match.status==="completed"||match.phase==="FT"||match.phase==="FT_PEN"
-  const isLive=match.status==="live"||match.phase==="1H"||match.phase==="HT"||match.phase==="2H"||match.phase==="ET1"||match.phase==="ET2"||match.phase==="PEN"
-  const past=isDone
+  const t1 = match.home_team, t2 = match.away_team
+  const isPT = hasPortugal(t1, t2)
+  const tv = getTv(t1, t2)
+  const hora = toLocalHour(match.kickoff_utc)
+  const isDone = match.status==="completed" || match.phase==="FT" || match.phase==="FT_PEN"
+  const isLive = match.status==="live" || ["1H","HT","2H","ET1","ET2","PEN"].includes(match.phase)
+  const past = isDone
 
-  // Determine winner for bold -- home wins if home_score > away_score, etc.
-  const s1=match.home_score ?? null
-  const s2=match.away_score ?? null
-  const homePen=match.home_pen ?? null
-  const awayPen=match.away_pen ?? null
-  const homeWins = isDone && s1!=null && s2!=null && (
-    homePen!=null ? homePen > awayPen : s1 > s2
-  )
-  const awayWins = isDone && s1!=null && s2!=null && (
-    homePen!=null ? awayPen > homePen : s2 > s1
-  )
+  const s1 = match.home_score ?? null
+  const s2 = match.away_score ?? null
+  const homePen = match.home_pen ?? null
+  const awayPen = match.away_pen ?? null
+  const homeWins = isDone && s1!=null && s2!=null && (homePen!=null ? homePen > awayPen : s1 > s2)
+  const awayWins = isDone && s1!=null && s2!=null && (homePen!=null ? awayPen > homePen : s2 > s1)
 
   return (
     <div style={{
-      background:isPT?"rgba(0,87,168,0.15)":isLive?"rgba(200,0,0,0.08)":"rgba(255,255,255,0.04)",
-      border:isPT?"1px solid rgba(0,87,168,0.5)":isLive?"1px solid rgba(200,0,0,0.4)":"1px solid rgba(255,255,255,0.07)",
-      borderRadius:"8px",padding:"8px 10px",marginBottom:"5px",opacity:past&&!isPT?0.55:1,
+      background: isPT?"rgba(0,87,168,0.15)":isLive?"rgba(200,0,0,0.08)":"rgba(255,255,255,0.04)",
+      border: isPT?"1px solid rgba(0,87,168,0.5)":isLive?"1px solid rgba(200,0,0,0.4)":"1px solid rgba(255,255,255,0.07)",
+      borderRadius:"8px", padding:"8px 10px", marginBottom:"5px", opacity:past&&!isPT?0.55:1,
     }}>
-      {/* Meta row: time + group + stadium */}
       <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
         {isLive
           ? <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
@@ -271,33 +364,23 @@ function MatchRow({ match }) {
             </span>
           : <span style={{fontSize:"10px",color:"#777",fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{hora}</span>
         }
-        {match.group_name&&<span style={{fontSize:"9px",background:"rgba(255,255,255,0.1)",color:"#aaa",padding:"1px 4px",borderRadius:"3px",fontWeight:600}}>G{match.group_name}</span>}
-        {match.stadium&&<span style={{fontSize:"9px",color:"#555",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📍 {match.stadium}</span>}
+        {match.group_name && <span style={{fontSize:"9px",background:"rgba(255,255,255,0.1)",color:"#aaa",padding:"1px 4px",borderRadius:"3px",fontWeight:600}}>G{match.group_name}</span>}
+        {match.stadium && <span style={{fontSize:"9px",color:"#555",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📍 {match.stadium}</span>}
       </div>
-
-      {/* Teams + score + TV */}
       <div style={{display:"flex",alignItems:"center",gap:6}}>
-        {/* Teams column */}
         <div style={{flex:1,minWidth:0}}>
-          {/* Home team */}
           <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:3}}>
             <Flag name={t1}/>
-            <span style={{fontSize:"13px",color:"#eee",fontWeight:homeWins||isPT&&t1==="Portugal"?700:400}}>{toPT(t1)}</span>
+            <span style={{fontSize:"13px",color:"#eee",fontWeight:homeWins||(isPT&&t1==="Portugal")?700:400}}>{toPT(t1)}</span>
             {isDone&&s1!=null&&<span style={{fontSize:"13px",color:"#fff",fontWeight:homeWins?700:400,marginLeft:"auto",paddingLeft:8}}>{s1}{homePen!=null?` (${homePen}p)`:""}</span>}
           </div>
-          {/* Away team */}
           <div style={{display:"flex",alignItems:"center",gap:5}}>
             <Flag name={t2}/>
-            <span style={{fontSize:"13px",color:"#eee",fontWeight:awayWins||isPT&&t2==="Portugal"?700:400}}>{toPT(t2)}</span>
+            <span style={{fontSize:"13px",color:"#eee",fontWeight:awayWins||(isPT&&t2==="Portugal")?700:400}}>{toPT(t2)}</span>
             {isDone&&s2!=null&&<span style={{fontSize:"13px",color:"#fff",fontWeight:awayWins?700:400,marginLeft:"auto",paddingLeft:8}}>{s2}{awayPen!=null?` (${awayPen}p)`:""}</span>}
           </div>
-          {/* Live score */}
-          {isLive&&s1!=null&&(
-            <div style={{fontSize:"15px",fontWeight:700,color:"#fff",marginTop:2}}>{s1} – {s2}</div>
-          )}
+          {isLive&&s1!=null&&<div style={{fontSize:"15px",fontWeight:700,color:"#fff",marginTop:2}}>{s1} – {s2}</div>}
         </div>
-
-        {/* TV badges -- vertical stack */}
         <div style={{display:"flex",flexDirection:"column",gap:3,alignItems:"flex-end",flexShrink:0}}>
           {tv.map(t=><TVBadge key={t} canal={t}/>)}
         </div>
@@ -306,64 +389,214 @@ function MatchRow({ match }) {
   )
 }
 
-// ── TAB: FIXTURES ─────────────────────────────────────────────────────────────
-function FixturesTab({ matches, porOnly, isActive }) {
-  const [filterGroup,setFilterGroup]=useState("ALL")
-  const todayRef=useRef(null)
-  const groups=["A","B","C","D","E","F","G","H","I","J","K","L"]
-  const filtered=matches.filter(m=>{
-    if(m.round!=="group")return false
-    if(porOnly&&!hasPortugal(m.home_team,m.away_team))return false
-    if(filterGroup!=="ALL"&&m.group_name!==filterGroup)return false
-    return true
-  })
-  const byDate={}
-  filtered.forEach(m=>{const k=toDateKey(m.kickoff_utc);if(!byDate[k])byDate[k]=[];byDate[k].push(m)})
-  const todayKey=toDateKey(new Date().toISOString())
+// Row for knockout matches — handles TBD teams with slot codes
+function KnockoutMatchRow({ match, standingsMap }) {
+  const apiT1 = match.home_team
+  const apiT2 = match.away_team
+  const staticData = BRACKET_MATCHES[match.match_number] || match._static
+  const slotCode1 = staticData?.team1 || "?"
+  const slotCode2 = staticData?.team2 || "?"
 
-  // Scroll to today's section when tab opens or filter changes
-  useEffect(()=>{
-    if(todayRef.current){
-      setTimeout(()=>todayRef.current?.scrollIntoView({behavior:"smooth",block:"start"}),100)
+  const res1 = !apiT1 ? resolveSlotTeam(slotCode1, standingsMap) : null
+  const res2 = !apiT2 ? resolveSlotTeam(slotCode2, standingsMap) : null
+
+  const isPT = hasPortugal(apiT1, apiT2)
+  const tv = (apiT1 && apiT2) ? getTv(apiT1, apiT2) : ["SPTV"]
+  const hora = toLocalHour(match.kickoff_utc)
+  const isDone = match.status==="completed" || match.phase==="FT" || match.phase==="FT_PEN"
+  const isLive = match.status==="live" || ["1H","HT","2H","ET1","ET2","PEN"].includes(match.phase)
+
+  const s1 = match.home_score ?? null
+  const s2 = match.away_score ?? null
+  const homePen = match.home_pen ?? null
+  const awayPen = match.away_pen ?? null
+  const homeWins = isDone && s1!=null && s2!=null && (homePen!=null ? homePen > awayPen : s1 > s2)
+  const awayWins = isDone && s1!=null && s2!=null && (homePen!=null ? awayPen > homePen : s2 > s1)
+
+  function TeamLine({ apiTeam, resolved, code, score, wins }) {
+    const isPortugal = apiTeam === "Portugal"
+    if (apiTeam) {
+      return (
+        <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:3}}>
+          <Flag name={apiTeam}/>
+          <span style={{fontSize:"13px",color:"#eee",fontWeight:wins||isPortugal?700:400}}>{toPT(apiTeam)}</span>
+          {isDone&&score!=null&&<span style={{fontSize:"13px",color:"#fff",fontWeight:wins?700:400,marginLeft:"auto",paddingLeft:8}}>{score}{homePen!=null&&apiTeam===match.home_team?` (${homePen}p)`:awayPen!=null&&apiTeam===match.away_team?` (${awayPen}p)`:""}</span>}
+        </div>
+      )
     }
-  },[filterGroup,porOnly,isActive])
+    if (resolved?.teamName) {
+      return (
+        <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:3}}>
+          <Flag name={resolved.teamName} size={12}/>
+          <span style={{fontSize:"12px",color:"#555"}}>{resolved.code}</span>
+          <span style={{fontSize:"11px",color:"#444"}}>({toPT(resolved.teamName)}*)</span>
+        </div>
+      )
+    }
+    return (
+      <div style={{marginBottom:3}}>
+        <span style={{fontSize:"12px",color:"#444"}}>{code || "?"}</span>
+      </div>
+    )
+  }
+
+  const hasTBD = !apiT1 || !apiT2
 
   return (
-    <div>
-      <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:10}}>
-        {["ALL",...groups].map(g=>(
-          <button key={g} onClick={()=>setFilterGroup(g)} style={{
-            padding:"3px 9px",borderRadius:"20px",border:"none",cursor:"pointer",
-            fontSize:"11px",fontWeight:600,
-            background:filterGroup===g?(g==="K"?"#0057A8":"rgba(255,255,255,0.9)"):"rgba(255,255,255,0.08)",
-            color:filterGroup===g?(g==="K"?"#fff":"#000"):"#888",
-          }}>{g==="ALL"?"Todos":`G${g}`}</button>
-        ))}
+    <div style={{
+      background: isPT?"rgba(0,87,168,0.15)":isLive?"rgba(200,0,0,0.08)":hasTBD?"rgba(255,255,255,0.02)":"rgba(255,255,255,0.04)",
+      border: isPT?"1px solid rgba(0,87,168,0.5)":isLive?"1px solid rgba(200,0,0,0.4)":"1px solid rgba(255,255,255,0.07)",
+      borderRadius:"8px", padding:"8px 10px", marginBottom:"5px",
+      opacity: hasTBD ? 0.7 : 1,
+    }}>
+      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
+        {isLive
+          ? <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
+              <span style={{width:6,height:6,borderRadius:"50%",background:"#f00",animation:"pulse 1s infinite",flexShrink:0}}/>
+              <span style={{color:"#f55",fontSize:"10px",fontWeight:700}}>{phaseLabel(match.phase)}</span>
+            </span>
+          : <span style={{fontSize:"10px",color:"#777",fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{hora}</span>
+        }
+        {match.stadium && <span style={{fontSize:"9px",color:"#555",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📍 {match.stadium || staticData?.ground}</span>}
+        {hasTBD && !isLive && !isDone && <span style={{fontSize:"9px",color:"#444",marginLeft:"auto"}}>A definir</span>}
       </div>
-      {Object.keys(byDate).map(dk=>(
-        <div key={dk}>
-          <div ref={dk===todayKey?todayRef:null} style={{fontSize:"11px",fontWeight:700,color:dk===todayKey?"#4CAF50":"#666",letterSpacing:"0.06em",textTransform:"uppercase",margin:"10px 0 5px",paddingBottom:4,borderBottom:"1px solid rgba(255,255,255,0.06)",display:"flex",alignItems:"center",gap:6}}>
-            {toLocalDate(byDate[dk][0].kickoff_utc)}
-            {dk===todayKey&&<span style={{background:"#4CAF50",color:"#000",fontSize:"9px",padding:"1px 5px",borderRadius:"3px"}}>HOJE</span>}
-          </div>
-          {byDate[dk].map((m,i)=><MatchRow key={m.id||i} match={m}/>)}
+      <div style={{display:"flex",alignItems:"center",gap:6}}>
+        <div style={{flex:1,minWidth:0}}>
+          <TeamLine apiTeam={apiT1} resolved={res1} code={slotCode1} score={s1} wins={homeWins}/>
+          <TeamLine apiTeam={apiT2} resolved={res2} code={slotCode2} score={s2} wins={awayWins}/>
+          {isLive&&s1!=null&&<div style={{fontSize:"15px",fontWeight:700,color:"#fff",marginTop:2}}>{s1} – {s2}</div>}
         </div>
-      ))}
-      {Object.keys(byDate).length===0&&<div style={{textAlign:"center",color:"#555",padding:"40px 0",fontSize:"13px"}}>Sem jogos para este filtro.</div>}
+        {!hasTBD && (
+          <div style={{display:"flex",flexDirection:"column",gap:3,alignItems:"flex-end",flexShrink:0}}>
+            {tv.map(t=><TVBadge key={t} canal={t}/>)}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
 
+// ── TAB: FIXTURES ─────────────────────────────────────────────────────────────
+function FixturesTab({ matches, standings, porOnly, isActive }) {
+  const [filterPhase, setFilterPhase] = useState("ALL")
+  const todayRef = useRef(null)
+  const standingsMap = buildStandingsMap(standings || [])
+
+  // Filter by phase and Portugal toggle
+  const filtered = matches.filter(m => {
+    const round = m.round || "group"
+    if (porOnly && round === "group" && !hasPortugal(m.home_team, m.away_team)) return false
+    if (filterPhase === "ALL") return true
+    if (filterPhase === "final") return round === "final" || round === "3rd"
+    return round === filterPhase
+  })
+
+  // Sort by kickoff time
+  const sorted = [...filtered].sort((a, b) =>
+    new Date(a.kickoff_utc) - new Date(b.kickoff_utc)
+  )
+
+  // Group by date
+  const byDate = {}
+  sorted.forEach(m => {
+    const k = toDateKey(m.kickoff_utc)
+    if (!byDate[k]) byDate[k] = []
+    byDate[k].push(m)
+  })
+
+  const todayKey = toDateKey(new Date().toISOString())
+
+  useEffect(() => {
+    if (todayRef.current) {
+      setTimeout(() => todayRef.current?.scrollIntoView({behavior:"smooth",block:"start"}), 100)
+    }
+  }, [filterPhase, porOnly, isActive])
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:10}}>
+        {PHASE_FILTERS.map(f => (
+          <button key={f.id} onClick={() => setFilterPhase(f.id)} style={{
+            padding:"3px 10px", borderRadius:"20px", border:"none", cursor:"pointer",
+            fontSize:"11px", fontWeight:600,
+            background: filterPhase===f.id ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.08)",
+            color: filterPhase===f.id ? "#000" : "#888",
+          }}>{f.label}</button>
+        ))}
+      </div>
+
+      {Object.keys(byDate).length === 0 && (
+        <div style={{textAlign:"center",color:"#555",padding:"40px 0",fontSize:"13px"}}>
+          {filterPhase === "ALL" ? "Sem jogos disponíveis." : "Ainda sem jogos nesta fase."}
+        </div>
+      )}
+
+      {Object.keys(byDate).map(dk => {
+        const dayMatches = byDate[dk]
+        const rows = []
+        let lastPhase = null
+
+        dayMatches.forEach((m, i) => {
+          const thisPhase = m.round || "group"
+          if (thisPhase !== lastPhase && filterPhase === "ALL") {
+            const label = PHASE_SEPARATOR_LABEL[thisPhase]
+            const color = PHASE_SEPARATOR_COLOR[thisPhase] || "#666"
+            if (label) {
+              rows.push(
+                <div key={`phase-${thisPhase}-${dk}`} style={{
+                  display:"flex", alignItems:"center", gap:8, margin:"10px 0 6px",
+                }}>
+                  <div style={{height:"1px",flex:1,background:`${color}33`}}/>
+                  <span style={{fontSize:"9px",fontWeight:700,color,letterSpacing:"0.1em",whiteSpace:"nowrap"}}>{label}</span>
+                  <div style={{height:"1px",flex:1,background:`${color}33`}}/>
+                </div>
+              )
+            }
+            lastPhase = thisPhase
+          }
+
+          if (thisPhase === "group") {
+            rows.push(<MatchRow key={m.id||i} match={m}/>)
+          } else {
+            rows.push(<KnockoutMatchRow key={m.id||i} match={m} standingsMap={standingsMap}/>)
+          }
+        })
+
+        return (
+          <div key={dk}>
+            <div
+              ref={dk===todayKey ? todayRef : null}
+              style={{
+                fontSize:"11px", fontWeight:700,
+                color: dk===todayKey ? "#4CAF50" : "#666",
+                letterSpacing:"0.06em", textTransform:"uppercase",
+                margin:"10px 0 5px", paddingBottom:4,
+                borderBottom:"1px solid rgba(255,255,255,0.06)",
+                display:"flex", alignItems:"center", gap:6,
+              }}
+            >
+              {toLocalDate(dayMatches[0].kickoff_utc)}
+              {dk===todayKey && <span style={{background:"#4CAF50",color:"#000",fontSize:"9px",padding:"1px 5px",borderRadius:"3px"}}>HOJE</span>}
+            </div>
+            {rows}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+
 // ── TAB: GRUPOS ───────────────────────────────────────────────────────────────
 function GroupsTab({ standings }) {
-  if(!standings||standings.length===0) return <div style={{color:"#555",textAlign:"center",padding:"40px 0"}}>A carregar classificações...</div>
+  if (!standings||standings.length===0) return <div style={{color:"#555",textAlign:"center",padding:"40px 0"}}>A carregar classificações...</div>
   return (
     <div style={{display:"flex",flexDirection:"column",gap:14}}>
       {standings.map(group=>(
         <div key={group.group_name} style={{
-          background:group.group_name==="K"?"rgba(0,87,168,0.15)":"rgba(255,255,255,0.04)",
-          border:group.group_name==="K"?"1px solid rgba(0,87,168,0.4)":"1px solid rgba(255,255,255,0.07)",
-          borderRadius:"8px",padding:"10px 12px",
+          background: group.group_name==="K"?"rgba(0,87,168,0.15)":"rgba(255,255,255,0.04)",
+          border: group.group_name==="K"?"1px solid rgba(0,87,168,0.4)":"1px solid rgba(255,255,255,0.07)",
+          borderRadius:"8px", padding:"10px 12px",
         }}>
           <div style={{fontSize:"11px",fontWeight:700,color:"#999",marginBottom:8,letterSpacing:"0.08em"}}>
             GRUPO {group.group_name} {group.group_name==="K"&&<Flag name="Portugal" size={12}/>}
@@ -382,8 +615,8 @@ function GroupsTab({ standings }) {
             </thead>
             <tbody>
               {(group.standings||[]).map((row,i)=>{
-                const isQ=i<2
-                const isPT=row.team_name==="Portugal"
+                const isQ = i<2
+                const isPT = row.team_name==="Portugal"
                 return (
                   <tr key={row.team_name} style={{borderTop:"1px solid rgba(255,255,255,0.05)",background:isPT?"rgba(0,87,168,0.1)":"transparent"}}>
                     <td style={{padding:"5px 0",display:"flex",alignItems:"center",gap:5}}>
@@ -411,146 +644,39 @@ function GroupsTab({ standings }) {
 }
 
 // ── TAB: ELIMINATÓRIAS -- SVG BRACKET ─────────────────────────────────────────
-
-// Card dimensions
-const CW = 158  // card width
-const CH = 62   // card height
-const GAP_Y = 10 // vertical gap between cards in same round
-const COL_GAP = 48 // horizontal gap between rounds
-
-// For each round, how many cards and their vertical positions
-// We lay out R32 (16 cards) as the leftmost column
-// Each subsequent round has half the cards, vertically centered between their pair
-
-function getCardY(round, slotIdx) {
-  // R32: 16 slots, each slot = CH + GAP_Y
-  const unit = CH + GAP_Y
-  if (round === "R32") return slotIdx * unit
-  if (round === "R16") {
-    // Each R16 card is centered between its 2 R32 children
-    // R16 slot i is between R32 slots 2i and 2i+1
-    const top = getCardY("R32", slotIdx*2)
-    const bot = getCardY("R32", slotIdx*2+1) + CH
-    return (top + bot) / 2 - CH/2
-  }
-  if (round === "QF") {
-    const top = getCardY("R16", slotIdx*2)
-    const bot = getCardY("R16", slotIdx*2+1) + CH
-    return (top + bot) / 2 - CH/2
-  }
-  if (round === "SF") {
-    const top = getCardY("QF", slotIdx*2)
-    const bot = getCardY("QF", slotIdx*2+1) + CH
-    return (top + bot) / 2 - CH/2
-  }
-  if (round === "Final") {
-    const top = getCardY("SF", 0)
-    const bot = getCardY("SF", 1) + CH
-    return (top + bot) / 2 - CH/2
-  }
-  return 0
-}
-
-const ROUNDS = ["R32","R16","QF","SF","Final"]
-const ROUND_LABELS = {R32:"16-AVOS",R16:"OITAVOS",QF:"QUARTOS",SF:"MEIAS",Final:"FINAL"}
-const ROUND_COLORS = {R32:"#666",R16:"#888",QF:"#aaa",SF:"#FFD700",Final:"#e74c3c"}
-
-// Slot order: which match num goes in each vertical slot per round
-const SLOTS = {
-  R32:  [74,77, 73,75, 83,84, 81,82,  76,78, 79,80, 86,88, 85,87],
-  R16:  [89,90, 93,94,  91,92, 95,96],
-  QF:   [97,98, 99,100],
-  SF:   [101,102],
-  Final:[104],
-}
-
-// Map match num -> slot index per round
-function buildSlotMap() {
-  const m = {}
-  Object.entries(SLOTS).forEach(([round, nums]) => {
-    nums.forEach((num,idx) => { m[num] = { round, idx } })
-  })
-  return m
-}
-const SLOT_MAP = buildSlotMap()
-
-function getColX(round) {
-  const idx = ROUNDS.indexOf(round)
-  return idx * (CW + COL_GAP)
-}
-
-// Total SVG dimensions
-const TOTAL_H = 16 * (CH + GAP_Y) + 60  // header space
-const TOTAL_W = ROUNDS.length * (CW + COL_GAP) + 20
-const HEADER_H = 28
-
-// ── BRACKET SLOT RESOLUTION ───────────────────────────────────────────────────
-// Builds { "A": ["Mexico","USA","Qatar"], "B": [...], ... } from standings array
-// where index 0 = 1st place, 1 = 2nd, etc.
-function buildStandingsMap(standings) {
-  const map = {}
-  standings.forEach(g => {
-    const letter = g.group_name
-    map[letter] = (g.standings || []).map(row => row.team_name)
-  })
-  return map
-}
-
-// Given a static slot code like "1E", "2A", "3B", returns { code, teamName? }
-// For complex codes like "3E/F/G/I" or "V74", returns { code } only (no expansion)
-function resolveSlotTeam(code, standingsMap) {
-  if (!code) return { code }
-  // Simple pattern: digit + single letter (e.g. "1E", "2A", "3L")
-  const m = code.match(/^([123])([A-L])$/)
-  if (!m) return { code }
-  const pos = parseInt(m[1], 10) - 1   // 0-based index
-  const group = m[2]
-  const teams = standingsMap[group]
-  if (!teams || teams.length <= pos) return { code }
-  return { code, teamName: teams[pos] }
-}
-
-
 function BracketCard({ matchNum, apiMatches, standingsMap, x, y }) {
   const static_m = BRACKET_MATCHES[matchNum]
   if (!static_m) return null
-
   const api_m = apiMatches.find(m => m.match_number === matchNum)
   const t1 = api_m?.home_team || null
   const t2 = api_m?.away_team || null
   const score1 = api_m?.home_score
   const score2 = api_m?.away_score
-  const isDone = api_m?.status === "completed" || api_m?.phase === "FT" || api_m?.phase === "FT_PEN"
-  const isLive = api_m?.status === "live"
+  const isDone = api_m?.status==="completed" || api_m?.phase==="FT" || api_m?.phase==="FT_PEN"
+  const isLive = api_m?.status==="live"
   const isPT = t1==="Portugal" || t2==="Portugal"
-
   const resolved1 = !t1 ? resolveSlotTeam(static_m.team1, standingsMap) : null
   const resolved2 = !t2 ? resolveSlotTeam(static_m.team2, standingsMap) : null
-
-  const borderCol = isPT ? "rgba(0,87,168,0.6)" : isLive ? "rgba(200,0,0,0.5)" : "rgba(255,255,255,0.12)"
-  const bgCol = isPT ? "rgba(0,87,168,0.18)" : "rgba(255,255,255,0.05)"
+  const borderCol = isPT?"rgba(0,87,168,0.6)":isLive?"rgba(200,0,0,0.5)":"rgba(255,255,255,0.12)"
+  const bgCol = isPT?"rgba(0,87,168,0.18)":"rgba(255,255,255,0.05)"
 
   function TeamRow({ apiTeam, resolved, isPortugal, score, showScore }) {
-    if (apiTeam) {
-      return (
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <span style={{display:"flex",alignItems:"center",gap:3,fontSize:"11px",color:"#ddd",fontWeight:isPortugal?700:400,overflow:"hidden",maxWidth:110}}>
-            <Flag name={apiTeam} size={11}/>
-            <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{toPT(apiTeam)}</span>
-          </span>
-          {showScore && <span style={{fontSize:"12px",color:"#fff",fontWeight:700,marginLeft:4}}>{score??""}</span>}
-        </div>
-      )
-    }
-    if (resolved?.teamName) {
-      return (
-        <div style={{display:"flex",alignItems:"center",gap:3,overflow:"hidden"}}>
-          <span style={{fontSize:"11px",color:"#555",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-            {resolved.code} <span style={{color:"#444"}}>({toPT(resolved.teamName)})</span><span style={{color:"#3a3a3a",fontSize:"9px"}}>*</span>
-          </span>
-        </div>
-      )
-    }
+    if (apiTeam) return (
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{display:"flex",alignItems:"center",gap:3,fontSize:"11px",color:"#ddd",fontWeight:isPortugal?700:400,overflow:"hidden",maxWidth:110}}>
+          <Flag name={apiTeam} size={11}/>
+          <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{toPT(apiTeam)}</span>
+        </span>
+        {showScore&&<span style={{fontSize:"12px",color:"#fff",fontWeight:700,marginLeft:4}}>{score??""}</span>}
+      </div>
+    )
+    if (resolved?.teamName) return (
+      <div style={{display:"flex",alignItems:"center",gap:3,overflow:"hidden"}}>
+        <span style={{fontSize:"11px",color:"#555",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+          {resolved.code} <span style={{color:"#444"}}>({toPT(resolved.teamName)})</span><span style={{color:"#3a3a3a",fontSize:"9px"}}>*</span>
+        </span>
+      </div>
+    )
     return (
       <div style={{overflow:"hidden"}}>
         <span style={{fontSize:"11px",color:"#444",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"block"}}>
@@ -585,13 +711,10 @@ function BracketCard({ matchNum, apiMatches, standingsMap, x, y }) {
 }
 
 function KnockoutTab({ matches, standings }) {
-  const standingsMap = buildStandingsMap(standings || [])
-  // Build connector lines: for each round > R32, draw lines from children to parent
+  const standingsMap = buildStandingsMap(standings||[])
   const lines = []
-  const lineKey = useRef(0)
-
   ROUNDS.forEach((round, rIdx) => {
-    if (rIdx === 0) return // R32 has no children to connect from
+    if (rIdx===0) return
     const slots = SLOTS[round]
     slots.forEach((matchNum, slotIdx) => {
       const children = BRACKET_TREE[matchNum]
@@ -599,16 +722,13 @@ function KnockoutTab({ matches, standings }) {
       const [childA, childB] = children
       const slotA = SLOT_MAP[childA]
       const slotB = SLOT_MAP[childB]
-      if (!slotA || !slotB) return
-
-      const prevRound = ROUNDS[rIdx-1]
-      const xRight = getColX(prevRound) + CW  // right edge of child cards
+      if (!slotA||!slotB) return
+      const xRight = getColX(ROUNDS[rIdx-1]) + CW
       const yA = HEADER_H + getCardY(slotA.round, slotA.idx) + CH/2
       const yB = HEADER_H + getCardY(slotB.round, slotB.idx) + CH/2
       const xLeft = getColX(round)
       const yParent = HEADER_H + getCardY(round, slotIdx) + CH/2
       const xMid = xRight + COL_GAP/2
-
       lines.push(
         <g key={`line-${matchNum}`} stroke="rgba(255,255,255,0.15)" strokeWidth="1.5" fill="none">
           <path d={`M${xRight},${yA} H${xMid} V${yParent} H${xLeft}`}/>
@@ -617,55 +737,29 @@ function KnockoutTab({ matches, standings }) {
       )
     })
   })
-
-  // 3rd place card -- positioned below Final
   const finalY = HEADER_H + getCardY("Final", 0)
   const thirdY = finalY + CH + 30
   const finalX = getColX("Final")
-
   return (
     <div>
       <div style={{fontSize:"11px",color:"#555",marginBottom:8}}>← Scroll para ver todas as fases →</div>
       <div style={{overflowX:"auto",overflowY:"auto",WebkitOverflowScrolling:"touch",paddingBottom:16}}>
-        <svg width={TOTAL_W} height={TOTAL_H + 110} style={{display:"block"}}>
-          {/* Round headers */}
+        <svg width={TOTAL_W} height={TOTAL_H+110} style={{display:"block"}}>
           {ROUNDS.map(round=>(
             <g key={`hdr-${round}`}>
-              <text
-                x={getColX(round) + CW/2} y={18}
-                textAnchor="middle" fill={ROUND_COLORS[round]}
-                fontSize="10" fontWeight="700" fontFamily="Inter,-apple-system,sans-serif"
-                letterSpacing="1"
-              >{ROUND_LABELS[round]}</text>
+              <text x={getColX(round)+CW/2} y={18} textAnchor="middle" fill={ROUND_COLORS[round]} fontSize="10" fontWeight="700" fontFamily="Inter,-apple-system,sans-serif" letterSpacing="1">{ROUND_LABELS[round]}</text>
               <line x1={getColX(round)} y1={22} x2={getColX(round)+CW} y2={22} stroke={ROUND_COLORS[round]+"44"} strokeWidth="1"/>
             </g>
           ))}
-
-          {/* Connector lines */}
           {lines}
-
-          {/* Match cards */}
-          {ROUNDS.map(round=>
-            SLOTS[round].map((matchNum,slotIdx)=>(
-              <BracketCard
-                key={matchNum}
-                matchNum={matchNum}
-                apiMatches={matches}
-                standingsMap={standingsMap}
-                x={getColX(round)}
-                y={HEADER_H + getCardY(round, slotIdx)}
-              />
-            ))
-          )}
-
-          {/* 3rd place */}
+          {ROUNDS.map(round=>SLOTS[round].map((matchNum,slotIdx)=>(
+            <BracketCard key={matchNum} matchNum={matchNum} apiMatches={matches} standingsMap={standingsMap} x={getColX(round)} y={HEADER_H+getCardY(round,slotIdx)}/>
+          )))}
           <text x={finalX+CW/2} y={thirdY-8} textAnchor="middle" fill="#666" fontSize="9" fontWeight="700" fontFamily="Inter,-apple-system,sans-serif" letterSpacing="1">3º LUGAR</text>
           <BracketCard matchNum={103} apiMatches={matches} standingsMap={standingsMap} x={finalX} y={thirdY}/>
         </svg>
       </div>
-      <div style={{marginTop:8,fontSize:"10px",color:"#3a3a3a"}}>
-        * classificação provisória -- grupos ainda não concluídos
-      </div>
+      <div style={{marginTop:8,fontSize:"10px",color:"#3a3a3a"}}>* classificação provisória — grupos ainda não concluídos</div>
     </div>
   )
 }
@@ -702,19 +796,19 @@ function TvTab() {
 
 // ── ROOT ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [tab,setTab]=useState("fixtures")
-  const [porOnly,setPorOnly]=useState(false)
-  const [data,setData]=useState(null)
-  const [error,setError]=useState(null)
-  const [lastUpdate,setLastUpdate]=useState(null)
+  const [tab, setTab] = useState("fixtures")
+  const [porOnly, setPorOnly] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [lastUpdate, setLastUpdate] = useState(null)
 
   async function loadData() {
     setError(null)
     try {
-      const base=import.meta.env.BASE_URL
-      const res=await fetch(`${base}live.json?t=${Date.now()}`)
-      if(!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json=await res.json()
+      const base = import.meta.env.BASE_URL
+      const res = await fetch(`${base}live.json?t=${Date.now()}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = await res.json()
       setData(json)
       setLastUpdate(new Date(json.fetched_at))
     } catch(e) {
@@ -722,26 +816,25 @@ export default function App() {
     }
   }
 
-  // Detect live games -- refresh every 60s if live, otherwise every 5 min
-  const hasLive = (data?.matches||[]).some(m=>
-    m.status==="live"||["1H","HT","2H","ET1","ET2","PEN"].includes(m.phase)
+  const hasLive = (data?.matches||[]).some(m =>
+    m.status==="live" || ["1H","HT","2H","ET1","ET2","PEN"].includes(m.phase)
   )
 
-  useEffect(()=>{
+  useEffect(() => {
     loadData()
     const interval = hasLive ? 60*1000 : 5*60*1000
-    const iv=setInterval(loadData, interval)
-    return ()=>clearInterval(iv)
-  },[hasLive])
+    const iv = setInterval(loadData, interval)
+    return () => clearInterval(iv)
+  }, [hasLive])
 
-  const matches=data?.matches||[]
-  const standings=data?.standings||[]
+  const matches = data?.matches || []
+  const standings = data?.standings || []
 
-  const tabs=[
-    {id:"fixtures",label:"Calendário"},
-    {id:"groups",label:"Grupos"},
-    {id:"knockout",label:"Eliminatórias"},
-    {id:"tv",label:"TV PT"},
+  const tabs = [
+    {id:"fixtures",   label:"Calendário"},
+    {id:"groups",     label:"Grupos"},
+    {id:"knockout",   label:"Eliminatórias"},
+    {id:"tv",         label:"TV PT"},
   ]
 
   return (
@@ -757,12 +850,14 @@ export default function App() {
         <div style={{padding:"16px 16px 10px",borderBottom:"1px solid rgba(255,255,255,0.07)",position:"sticky",top:0,background:"#0a0a0f",zIndex:10}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
             <div>
-              <div style={{fontSize:"17px",fontWeight:800,letterSpacing:"-0.02em",color:"#fff"}}><img src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/26bd.svg" alt="football" width="18" height="18" style={{display:"inline-block",verticalAlign:"middle",marginRight:4}}/> Mundial 2026</div>
+              <div style={{fontSize:"17px",fontWeight:800,letterSpacing:"-0.02em",color:"#fff"}}>
+                <img src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/26bd.svg" alt="football" width="18" height="18" style={{display:"inline-block",verticalAlign:"middle",marginRight:4}}/> Mundial 2026
+              </div>
               <div style={{fontSize:"10px",color:"#444",marginTop:1}}>
-                {lastUpdate?`Atualizado ${lastUpdate.toLocaleTimeString("pt-PT",{hour:"2-digit",minute:"2-digit"})}`:"11 Jun – 19 Jul · USA / CAN / MEX"}
+                {lastUpdate ? `Atualizado ${lastUpdate.toLocaleTimeString("pt-PT",{hour:"2-digit",minute:"2-digit"})}` : "11 Jun – 19 Jul · USA / CAN / MEX"}
               </div>
             </div>
-            <button onClick={()=>setPorOnly(!porOnly)} style={{padding:"5px 11px",borderRadius:"20px",border:"none",cursor:"pointer",background:porOnly?"#0057A8":"rgba(255,255,255,0.08)",color:porOnly?"#fff":"#777",fontSize:"12px",fontWeight:600}}>
+            <button onClick={() => setPorOnly(!porOnly)} style={{padding:"5px 11px",borderRadius:"20px",border:"none",cursor:"pointer",background:porOnly?"#0057A8":"rgba(255,255,255,0.08)",color:porOnly?"#fff":"#777",fontSize:"12px",fontWeight:600}}>
               <Flag name="Portugal" size={13}/> {porOnly?"Só PT":"Portugal"}
             </button>
           </div>
@@ -775,23 +870,23 @@ export default function App() {
           </div>
         </div>
         <div style={{padding:"12px 16px"}}>
-          {error&&(
+          {error && (
             <div style={{background:"rgba(200,0,0,0.1)",border:"1px solid rgba(200,0,0,0.3)",borderRadius:8,padding:"12px 16px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <span style={{color:"#e55",fontSize:"12px"}}>⚠ {error}</span>
               <button onClick={loadData} style={{background:"rgba(255,255,255,0.1)",border:"none",color:"#aaa",fontSize:"11px",padding:"4px 10px",borderRadius:5,cursor:"pointer"}}>Tentar novamente</button>
             </div>
           )}
-          {!data&&!error?(
+          {!data && !error ? (
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:"60vh",gap:12}}>
               <div style={{fontSize:"32px"}}>⚽</div>
               <div style={{color:"#555",fontSize:"13px"}}>A carregar dados...</div>
             </div>
-          ):(
+          ) : (
             <>
-              {tab==="fixtures"  &&<FixturesTab matches={matches} porOnly={porOnly} isActive={tab==="fixtures"}/>}
-              {tab==="groups"    &&<GroupsTab standings={standings}/>}
-              {tab==="knockout"  &&<KnockoutTab matches={matches} standings={standings}/>}
-              {tab==="tv"        &&<TvTab/>}
+              {tab==="fixtures"  && <FixturesTab matches={matches} standings={standings} porOnly={porOnly} isActive={tab==="fixtures"}/>}
+              {tab==="groups"    && <GroupsTab standings={standings}/>}
+              {tab==="knockout"  && <KnockoutTab matches={matches} standings={standings}/>}
+              {tab==="tv"        && <TvTab/>}
             </>
           )}
         </div>
